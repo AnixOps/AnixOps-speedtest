@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +21,8 @@ import (
 func PushMetrics(endpointURL, job string, results []probe.NodeResult, accessID, accessSecret string) error {
 	var buf bytes.Buffer
 
+	instance := hostname()
+
 	fmt.Fprintf(&buf, "# TYPE speedtest_http_latency_ms gauge\n")
 	fmt.Fprintf(&buf, "# TYPE speedtest_tcp_latency_ms gauge\n")
 	fmt.Fprintf(&buf, "# TYPE speedtest_node_up gauge\n")
@@ -28,7 +31,8 @@ func PushMetrics(endpointURL, job string, results []probe.NodeResult, accessID, 
 	now := float64(time.Now().Unix())
 
 	for _, r := range results {
-		labels := fmt.Sprintf(`{node="%s",server="%s",type="%s"}`,
+		labels := fmt.Sprintf(`{instance="%s",node="%s",server="%s",type="%s"}`,
+			instance,
 			escapeLabel(r.Name),
 			escapeLabel(fmt.Sprintf("%s:%d", r.Server, r.Port)),
 			escapeLabel(r.Type),
@@ -100,4 +104,12 @@ func escapeLabel(s string) string {
 	s = strings.ReplaceAll(s, `"`, `\"`)
 	s = strings.ReplaceAll(s, "\n", `\n`)
 	return s
+}
+
+func hostname() string {
+	h, _ := os.Hostname()
+	if h == "" {
+		h = "unknown"
+	}
+	return h
 }

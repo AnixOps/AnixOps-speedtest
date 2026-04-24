@@ -19,6 +19,10 @@ import (
 	"time"
 )
 
+var (
+	downloadMu sync.Mutex
+)
+
 type NodeConfig struct {
 	Protocol          string
 	Address           string
@@ -494,12 +498,11 @@ func EnsureBinary(ctx context.Context, downloadDir string, timeout time.Duration
 		}
 	}
 
-	// 3. Download from GitHub releases
-	downloadURL, assetName, err := githubReleaseURL("XTLS/Xray-core", "latest")
-	if err != nil {
-		return "", err
-	}
+	// 3. Download from GitHub releases (mutex to prevent concurrent download corruption)
+	downloadMu.Lock()
+	defer downloadMu.Unlock()
 
+	// Double-check after acquiring lock — another goroutine may have downloaded it
 	destDir := downloadDir
 	if destDir == "" {
 		destDir = exeDir
@@ -507,6 +510,18 @@ func EnsureBinary(ctx context.Context, downloadDir string, timeout time.Duration
 	if destDir == "" {
 		destDir = "."
 	}
+	for _, name := range candidates {
+		full := filepath.Join(destDir, name)
+		if info, err := os.Stat(full); err == nil && !info.IsDir() {
+			return full, nil
+		}
+	}
+
+	downloadURL, assetName, err := githubReleaseURL("XTLS/Xray-core", "latest")
+	if err != nil {
+		return "", err
+	}
+
 	binaryName := candidates[0]
 	destPath := filepath.Join(destDir, binaryName)
 
