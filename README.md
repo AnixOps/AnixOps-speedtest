@@ -43,6 +43,14 @@ Every report automatically generates a **Certificate of Authenticity**:
 
 ## Install
 
+### Quick Install (Linux / macOS)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AnixOps/AnixOps-speedtest/master/scripts/install-speedtest.sh | bash
+```
+
+### Build from Source
+
 ```bash
 go build -o speedtest ./cmd/speedtest
 ```
