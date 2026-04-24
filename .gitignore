@@ -4,15 +4,18 @@
 *.out
 *.prof
 bin/
+dist
 
 # Generated reports
 output/
 
 # Secrets
 .env
+.keys
 
-# Deployment scripts
-scripts/
+# Deployment configs (local only)
+scripts/deploy-pushgateway.sh
+scripts/prometheus-speedtest-scrape.yml
 
 # Go
 /vendor/
