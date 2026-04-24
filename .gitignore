@@ -1,0 +1,26 @@
+# Binaries
+*.exe
+*.test
+*.out
+*.prof
+bin/
+
+# Generated reports
+output/
+
+# Secrets
+.env
+
+# Deployment scripts
+scripts/
+
+# Go
+/vendor/
+/dist/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
