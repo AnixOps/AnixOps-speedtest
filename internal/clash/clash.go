@@ -8,28 +8,28 @@ import (
 )
 
 type Proxy struct {
-	Name       string            `yaml:"name"`
-	Type       string            `yaml:"type"`
-	Server     string            `yaml:"server"`
-	Port       int               `yaml:"port"`
-	Password   string            `yaml:"password,omitempty"`
-	UUID       string            `yaml:"uuid,omitempty"`
-	AlterID    int               `yaml:"alterId,omitempty"`
-	Cipher     string            `yaml:"cipher,omitempty"`
-	Flow       string            `yaml:"flow,omitempty"`
-	Network    string            `yaml:"network,omitempty"`
-	TLS        bool              `yaml:"tls,omitempty"`
-	SNI        string            `yaml:"sni,omitempty"`
-	SkipCertVerify bool          `yaml:"skip-cert-verify,omitempty"`
-	WSOpts     *WSOptions        `yaml:"ws-opts,omitempty"`
-	H2Opts     *H2Options        `yaml:"h2-opts,omitempty"`
-	GRPCOpts   *GRPCOptions      `yaml:"grpc-opts,omitempty"`
-	RealityOpts *RealityOptions  `yaml:"reality-opts,omitempty"`
-	Plugin     string            `yaml:"plugin,omitempty"`
-	PluginOpts map[string]any    `yaml:"plugin-opts,omitempty"`
-	UDP        bool              `yaml:"udp,omitempty"`
-	ClientFingerprint string    `yaml:"client-fingerprint,omitempty"`
-	Extra      map[string]any    `yaml:",inline"`
+	Name              string          `yaml:"name"`
+	Type              string          `yaml:"type"`
+	Server            string          `yaml:"server"`
+	Port              int             `yaml:"port"`
+	Password          string          `yaml:"password,omitempty"`
+	UUID              string          `yaml:"uuid,omitempty"`
+	AlterID           int             `yaml:"alterId,omitempty"`
+	Cipher            string          `yaml:"cipher,omitempty"`
+	Flow              string          `yaml:"flow,omitempty"`
+	Network           string          `yaml:"network,omitempty"`
+	TLS               bool            `yaml:"tls,omitempty"`
+	SNI               string          `yaml:"sni,omitempty"`
+	SkipCertVerify    bool            `yaml:"skip-cert-verify,omitempty"`
+	WSOpts            *WSOptions      `yaml:"ws-opts,omitempty"`
+	H2Opts            *H2Options      `yaml:"h2-opts,omitempty"`
+	GRPCOpts          *GRPCOptions    `yaml:"grpc-opts,omitempty"`
+	RealityOpts       *RealityOptions `yaml:"reality-opts,omitempty"`
+	Plugin            string          `yaml:"plugin,omitempty"`
+	PluginOpts        map[string]any  `yaml:"plugin-opts,omitempty"`
+	UDP               bool            `yaml:"udp,omitempty"`
+	ClientFingerprint string          `yaml:"client-fingerprint,omitempty"`
+	Extra             map[string]any  `yaml:",inline"`
 }
 
 type WSOptions struct {

@@ -1,14 +1,12 @@
 package xray
 
 import (
-	"archive/zip"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
+	"github.com/anixops/speedtest/internal/kernel"
 	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -293,11 +291,11 @@ type outbound struct {
 }
 
 type streamSettings struct {
-	Network         string            `json:"network"`
-	Security        string            `json:"security,omitempty"`
-	WSSettings      *wsSettings       `json:"wsSettings,omitempty"`
-	TLSSettings     *tlsSettings      `json:"tlsSettings,omitempty"`
-	RealitySettings *realitySettings  `json:"realitySettings,omitempty"`
+	Network         string           `json:"network"`
+	Security        string           `json:"security,omitempty"`
+	WSSettings      *wsSettings      `json:"wsSettings,omitempty"`
+	TLSSettings     *tlsSettings     `json:"tlsSettings,omitempty"`
+	RealitySettings *realitySettings `json:"realitySettings,omitempty"`
 }
 
 type wsSettings struct {
@@ -311,10 +309,10 @@ type tlsSettings struct {
 }
 
 type realitySettings struct {
-	ServerName        string   `json:"serverName"`
-	PublicKey         string   `json:"publicKey"`
-	ShortID           string   `json:"shortId,omitempty"`
-	Fingerprint       string   `json:"fingerprint,omitempty"`
+	ServerName  string `json:"serverName"`
+	PublicKey   string `json:"publicKey"`
+	ShortID     string `json:"shortId,omitempty"`
+	Fingerprint string `json:"fingerprint,omitempty"`
 }
 
 func buildStreamSettings(network string, node NodeConfig) *streamSettings {
@@ -517,15 +515,19 @@ func EnsureBinary(ctx context.Context, downloadDir string, timeout time.Duration
 		}
 	}
 
-	downloadURL, assetName, err := githubReleaseURL("XTLS/Xray-core", "latest")
+	rel, err := kernel.FetchRelease("XTLS/Xray-core", "latest")
 	if err != nil {
 		return "", err
+	}
+	asset, ok := selectAsset(rel.Assets, runtime.GOOS, runtime.GOARCH)
+	if !ok {
+		return "", fmt.Errorf("no release asset found for %s/%s", runtime.GOOS, runtime.GOARCH)
 	}
 
 	binaryName := candidates[0]
 	destPath := filepath.Join(destDir, binaryName)
 
-	return downloadAndExtract(ctx, downloadURL, assetName, destPath, timeout)
+	return downloadAndExtract(ctx, rel, asset, destPath, timeout)
 }
 
 func binaryCandidates() []string {
@@ -542,49 +544,7 @@ func exeDir() string {
 	return ""
 }
 
-func githubReleaseURL(repo string, version string) (string, string, error) {
-	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/%s", repo, version)
-
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Get(url)
-	if err != nil {
-		return "", "", fmt.Errorf("fetch github release info: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("fetch github release info: status %s", resp.Status)
-	}
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
-	if err != nil {
-		return "", "", err
-	}
-
-	var release struct {
-		TagName string `json:"tag_name"`
-		Assets  []struct {
-			Name        string `json:"name"`
-			BrowserURL  string `json:"browser_download_url"`
-			ContentType string `json:"content_type"`
-		} `json:"assets"`
-	}
-	if err := json.Unmarshal(body, &release); err != nil {
-		return "", "", fmt.Errorf("parse release info: %w", err)
-	}
-
-	assetName, dlURL := selectAsset(release.Assets, runtime.GOOS, runtime.GOARCH)
-	if dlURL == "" {
-		return "", "", fmt.Errorf("no release asset found for %s/%s", runtime.GOOS, runtime.GOARCH)
-	}
-	return dlURL, assetName, nil
-}
-
-func selectAsset(assets []struct {
-	Name        string `json:"name"`
-	BrowserURL  string `json:"browser_download_url"`
-	ContentType string `json:"content_type"`
-}, goos string, goarch string) (string, string) {
+func selectAsset(assets []kernel.Asset, goos string, goarch string) (kernel.Asset, bool) {
 	assetPatterns := map[string][]string{
 		"linux-amd64":   {"Xray-linux-64.zip"},
 		"linux-arm64":   {"Xray-linux-arm64-v8a.zip"},
@@ -601,7 +561,7 @@ func selectAsset(assets []struct {
 		for _, a := range assets {
 			for _, pat := range patterns {
 				if strings.EqualFold(a.Name, pat) {
-					return a.Name, a.BrowserURL
+					return a, true
 				}
 			}
 		}
@@ -610,132 +570,33 @@ func selectAsset(assets []struct {
 	// Fallback: first zip asset
 	for _, a := range assets {
 		if strings.HasSuffix(a.Name, ".zip") {
-			return a.Name, a.BrowserURL
+			return a, true
 		}
 	}
-	return "", ""
+	return kernel.Asset{}, false
 }
 
-func downloadAndExtract(ctx context.Context, downloadURL string, assetName string, destPath string, timeout time.Duration) (string, error) {
-	fmt.Fprintf(os.Stderr, "Downloading %s...\n", assetName)
-
-	reqCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, downloadURL, nil)
-	if err != nil {
-		return "", fmt.Errorf("create download request: %w", err)
-	}
-
-	client := &http.Client{Timeout: timeout}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("download failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("download failed: status %s", resp.Status)
-	}
-
-	// Write to temp file
-	tmpPath := destPath + ".download"
-	if err := os.MkdirAll(filepath.Dir(tmpPath), 0o755); err != nil {
-		return "", err
-	}
-	tmpFile, err := os.Create(tmpPath)
+func downloadAndExtract(ctx context.Context, rel *kernel.Release, asset kernel.Asset, destPath string, timeout time.Duration) (string, error) {
+	archive, err := kernel.Download(ctx, rel, asset, destPath, timeout)
 	if err != nil {
 		return "", err
 	}
+	defer os.Remove(archive)
 
-	written, err := io.Copy(tmpFile, resp.Body)
-	tmpFile.Close()
-	if err != nil {
-		os.Remove(tmpPath)
-		return "", fmt.Errorf("write download: %w", err)
+	binarySet := make(map[string]struct{})
+	for _, n := range binaryCandidates() {
+		binarySet[strings.ToLower(n)] = struct{}{}
 	}
-	if written == 0 {
-		os.Remove(tmpPath)
-		return "", errors.New("downloaded file is empty")
-	}
-
-	// Extract from zip
-	extractedPath := destPath + ".extracted"
-	if err := extractFromZip(tmpPath, extractedPath, runtime.GOOS); err != nil {
-		os.Remove(tmpPath)
+	extracted := destPath + ".extracted"
+	defer os.Remove(extracted)
+	if err := kernel.ExtractZip(archive, extracted, func(name string) bool {
+		_, ok := binarySet[strings.ToLower(name)]
+		return ok
+	}); err != nil {
 		return "", fmt.Errorf("extract zip: %w", err)
 	}
-	os.Remove(tmpPath)
-
-	// Activate
-	if runtime.GOOS == "windows" {
-		os.Remove(destPath)
-	}
-	if err := os.Rename(extractedPath, destPath); err != nil {
-		os.Remove(extractedPath)
-		// Fallback: copy
-		if copyErr := copyFile(extractedPath, destPath); copyErr != nil {
-			return "", fmt.Errorf("activate binary: %w", copyErr)
-		}
-	}
-	os.Remove(extractedPath)
-
-	if err := os.Chmod(destPath, 0o755); err != nil {
+	if err := kernel.Activate(extracted, destPath); err != nil {
 		return "", err
 	}
 	return destPath, nil
-}
-
-func extractFromZip(zipPath string, destPath string, goos string) error {
-	r, err := zip.OpenReader(zipPath)
-	if err != nil {
-		return fmt.Errorf("open zip: %w", err)
-	}
-	defer r.Close()
-
-	binaryNames := binaryCandidates()
-	binarySet := make(map[string]struct{})
-	for _, n := range binaryNames {
-		binarySet[strings.ToLower(n)] = struct{}{}
-	}
-
-	for _, f := range r.File {
-		name := filepath.Base(f.Name)
-		if _, ok := binarySet[strings.ToLower(name)]; ok {
-			src, err := f.Open()
-			if err != nil {
-				return err
-			}
-			defer src.Close()
-
-			dst, err := os.OpenFile(destPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
-			if err != nil {
-				return err
-			}
-			if _, err := io.Copy(dst, src); err != nil {
-				dst.Close()
-				return err
-			}
-			return dst.Close()
-		}
-	}
-
-	return fmt.Errorf("no binary found in zip archive")
-}
-
-func copyFile(src string, dst string) error {
-	sf, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer sf.Close()
-
-	df, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer df.Close()
-
-	_, err = io.Copy(df, sf)
-	return err
 }

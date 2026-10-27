@@ -32,10 +32,10 @@ type col struct {
 }
 
 var (
-	titleFace  font.Face
-	bodyFace   font.Face
-	titleSize  = 16.0
-	bodySize   = 13.0
+	titleFace font.Face
+	bodyFace  font.Face
+	titleSize = 16.0
+	bodySize  = 13.0
 )
 
 func init() {

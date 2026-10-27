@@ -44,15 +44,15 @@ func captureTLSCert(resp *http.Response) *TLSCertInfo {
 
 // Evidence records raw request/response data for a single test step.
 type Evidence struct {
-	Test       string            `json:"test"`
-	URL        string            `json:"url"`
-	Method     string            `json:"method"`
-	StatusCode int               `json:"status_code,omitempty"`
-	Headers    map[string]string `json:"headers,omitempty"`
-	Body       string            `json:"body,omitempty"`
+	Test       string             `json:"test"`
+	URL        string             `json:"url"`
+	Method     string             `json:"method"`
+	StatusCode int                `json:"status_code,omitempty"`
+	Headers    map[string]string  `json:"headers,omitempty"`
+	Body       string             `json:"body,omitempty"`
 	Timing     map[string]float64 `json:"timing_ms,omitempty"`
-	RawError   string            `json:"error,omitempty"`
-	TLSCert    *TLSCertInfo      `json:"tls_cert,omitempty"`
+	RawError   string             `json:"error,omitempty"`
+	TLSCert    *TLSCertInfo       `json:"tls_cert,omitempty"`
 }
 
 func evidenceHeaders(resp *http.Response) map[string]string {
@@ -86,12 +86,12 @@ type UnlockStatus struct {
 }
 
 type IPRiskResult struct {
-	IP          string  `json:"ip"`
-	RiskScore   float64 `json:"risk_score"`
-	RiskLevel   string  `json:"risk_level"` // "low", "medium", "high"
-	Country     string  `json:"country,omitempty"`
-	ISP         string  `json:"isp,omitempty"`
-	ProxyType   string  `json:"proxy_type,omitempty"`
+	IP        string  `json:"ip"`
+	RiskScore float64 `json:"risk_score"`
+	RiskLevel string  `json:"risk_level"` // "low", "medium", "high"
+	Country   string  `json:"country,omitempty"`
+	ISP       string  `json:"isp,omitempty"`
+	ProxyType string  `json:"proxy_type,omitempty"`
 }
 
 type DNSRegionResult struct {

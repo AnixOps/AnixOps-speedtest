@@ -43,14 +43,14 @@ func captureTLSCert(resp *http.Response) *TLSCertInfo {
 
 // Evidence records raw request/response data for a single test step.
 type Evidence struct {
-	Test       string            `json:"test"`
-	URL        string            `json:"url"`
-	Method     string            `json:"method"`
-	StatusCode int               `json:"status_code,omitempty"`
-	Body       string            `json:"body,omitempty"`
+	Test       string             `json:"test"`
+	URL        string             `json:"url"`
+	Method     string             `json:"method"`
+	StatusCode int                `json:"status_code,omitempty"`
+	Body       string             `json:"body,omitempty"`
 	Timing     map[string]float64 `json:"timing_ms,omitempty"`
-	RawError   string            `json:"error,omitempty"`
-	TLSCert    *TLSCertInfo      `json:"tls_cert,omitempty"`
+	RawError   string             `json:"error,omitempty"`
+	TLSCert    *TLSCertInfo       `json:"tls_cert,omitempty"`
 }
 
 func truncateBody(s string, limit int) string {
@@ -61,12 +61,12 @@ func truncateBody(s string, limit int) string {
 }
 
 type TopologyResult struct {
-	EntryIP    string `json:"entry_ip"`
+	EntryIP      string `json:"entry_ip"`
 	EntryCountry string `json:"entry_country,omitempty"`
-	ExitIP     string `json:"exit_ip"`
+	ExitIP       string `json:"exit_ip"`
 	ExitCountry  string `json:"exit_country,omitempty"`
-	ExitISP    string `json:"exit_isp,omitempty"`
-	Match      bool   `json:"match"`
+	ExitISP      string `json:"exit_isp,omitempty"`
+	Match        bool   `json:"match"`
 }
 
 func Analyze(ctx context.Context, proxyURL string, directTimeout, proxyTimeout time.Duration) (TopologyResult, []Evidence) {

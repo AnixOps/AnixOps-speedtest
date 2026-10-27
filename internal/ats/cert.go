@@ -27,9 +27,9 @@ type ATSCertificate struct {
 	MLDSAPublicKey string `json:"ml_dsa_public_key,omitempty"`
 	MLDSASignature string `json:"ml_dsa_signature,omitempty"`
 	// Key anchoring — public key itself anchored on-chain
-	PublicKeyHash  string `json:"public_key_hash,omitempty"`
-	PublicKeyOTS   string `json:"public_key_ots,omitempty"`
-	PublicKeyOTSS  string `json:"public_key_ots_status,omitempty"`
+	PublicKeyHash string `json:"public_key_hash,omitempty"`
+	PublicKeyOTS  string `json:"public_key_ots,omitempty"`
+	PublicKeyOTSS string `json:"public_key_ots_status,omitempty"`
 }
 
 type ReportEnvelope struct {

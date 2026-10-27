@@ -1,15 +1,9 @@
 package mihomo
 
 import (
-	"archive/zip"
-	"compress/gzip"
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,8 +14,20 @@ import (
 	"time"
 
 	"github.com/anixops/speedtest/internal/clash"
+	"github.com/anixops/speedtest/internal/kernel"
 	"gopkg.in/yaml.v3"
 )
+
+var downloadMu sync.Mutex
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
 
 type NodeConfig struct {
 	clash.Proxy
@@ -98,18 +104,18 @@ func Start(ctx context.Context, binaryPath string, proxy clash.Proxy, workDir st
 }
 
 type mihomoConfig struct {
-	Port               int             `yaml:"port,omitempty"`
-	SocksPort          int             `yaml:"socks-port,omitempty"`
-	MixedPort          int             `yaml:"mixed-port,omitempty"`
-	AllowLan           bool            `yaml:"allow-lan,omitempty"`
-	Mode               string          `yaml:"mode"`
-	LogLevel           string          `yaml:"log-level"`
-	Ipv6               bool            `yaml:"ipv6,omitempty"`
-	ExternalController string          `yaml:"external-controller,omitempty"`
-	Proxies            []proxyEntry    `yaml:"proxies"`
-	ProxyGroups        []proxyGroup    `yaml:"proxy-groups"`
-	Rules              []string        `yaml:"rules"`
-	Dns                *dnsConfig      `yaml:"dns,omitempty"`
+	Port               int          `yaml:"port,omitempty"`
+	SocksPort          int          `yaml:"socks-port,omitempty"`
+	MixedPort          int          `yaml:"mixed-port,omitempty"`
+	AllowLan           bool         `yaml:"allow-lan,omitempty"`
+	Mode               string       `yaml:"mode"`
+	LogLevel           string       `yaml:"log-level"`
+	Ipv6               bool         `yaml:"ipv6,omitempty"`
+	ExternalController string       `yaml:"external-controller,omitempty"`
+	Proxies            []proxyEntry `yaml:"proxies"`
+	ProxyGroups        []proxyGroup `yaml:"proxy-groups"`
+	Rules              []string     `yaml:"rules"`
+	Dns                *dnsConfig   `yaml:"dns,omitempty"`
 }
 
 type proxyEntry map[string]any
@@ -331,10 +337,24 @@ func EnsureBinary(ctx context.Context, downloadDir string, timeout time.Duration
 		}
 	}
 
-	// Download from GitHub releases
-	downloadURL, assetName, err := githubReleaseURL("MetaCubeX/mihomo", "latest")
+	// Download from GitHub releases (serialized so concurrent workers don't corrupt the file)
+	downloadMu.Lock()
+	defer downloadMu.Unlock()
+	if destDir := firstNonEmpty(downloadDir, exeDir, "."); true {
+		for _, name := range candidates {
+			full := filepath.Join(destDir, name)
+			if info, err := os.Stat(full); err == nil && !info.IsDir() {
+				return full, nil
+			}
+		}
+	}
+	rel, err := kernel.FetchRelease("MetaCubeX/mihomo", "latest")
 	if err != nil {
 		return "", err
+	}
+	asset, ok := selectAsset(rel.Assets, runtime.GOOS, runtime.GOARCH)
+	if !ok {
+		return "", fmt.Errorf("no release asset found for %s/%s", runtime.GOOS, runtime.GOARCH)
 	}
 
 	destDir := downloadDir
@@ -347,7 +367,7 @@ func EnsureBinary(ctx context.Context, downloadDir string, timeout time.Duration
 	binaryName := candidates[0]
 	destPath := filepath.Join(destDir, binaryName)
 
-	return downloadAndExtract(ctx, downloadURL, assetName, destPath, timeout)
+	return downloadAndExtract(ctx, rel, asset, destPath, timeout)
 }
 
 func mihomoCandidates() []string {
@@ -365,62 +385,18 @@ func exeDir() string {
 	return ""
 }
 
-func githubReleaseURL(repo string, version string) (string, string, error) {
-	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/%s", repo, version)
-
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Get(url)
-	if err != nil {
-		return "", "", fmt.Errorf("fetch github release info: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("fetch github release info: status %s", resp.Status)
-	}
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
-	if err != nil {
-		return "", "", err
-	}
-
-	var release struct {
-		TagName string `json:"tag_name"`
-		Assets  []struct {
-			Name        string `json:"name"`
-			BrowserURL  string `json:"browser_download_url"`
-			ContentType string `json:"content_type"`
-		} `json:"assets"`
-	}
-	if err := json.Unmarshal(body, &release); err != nil {
-		return "", "", fmt.Errorf("parse release info: %w", err)
-	}
-
-	assetName, dlURL := selectAsset(release.Assets, runtime.GOOS, runtime.GOARCH)
-	if dlURL == "" {
-		return "", "", fmt.Errorf("no release asset found for %s/%s", runtime.GOOS, runtime.GOARCH)
-	}
-	return dlURL, assetName, nil
-}
-
-func selectAsset(assets []struct {
-	Name        string `json:"name"`
-	BrowserURL  string `json:"browser_download_url"`
-	ContentType string `json:"content_type"`
-}, goos string, goarch string) (string, string) {
+func selectAsset(assets []kernel.Asset, goos string, goarch string) (kernel.Asset, bool) {
 	// Build platform key: e.g. "windows-amd64" -> "mihomo-windows-amd64"
 	platKey := "mihomo-" + goos + "-" + goarch
 
 	// Score each asset by how well it matches our platform
 	type candidate struct {
-		index int
-		name  string
-		url   string
+		asset kernel.Asset
 		score int
 	}
 	var best *candidate
 
-	for i, a := range assets {
+	for _, a := range assets {
 		name := strings.ToLower(a.Name)
 		score := 0
 
@@ -454,136 +430,37 @@ func selectAsset(assets []struct {
 		}
 
 		if best == nil || score > best.score {
-			best = &candidate{index: i, name: a.Name, url: a.BrowserURL, score: score}
+			best = &candidate{asset: a, score: score}
 		}
 	}
 
 	if best != nil {
-		return best.name, best.url
+		return best.asset, true
 	}
-	return "", ""
+	return kernel.Asset{}, false
 }
 
-func downloadAndExtract(ctx context.Context, downloadURL string, assetName string, destPath string, timeout time.Duration) (string, error) {
-	fmt.Fprintf(os.Stderr, "Downloading %s...\n", assetName)
-
-	reqCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, downloadURL, nil)
-	if err != nil {
-		return "", fmt.Errorf("create download request: %w", err)
-	}
-
-	client := &http.Client{Timeout: timeout}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("download failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("download failed: status %s", resp.Status)
-	}
-
-	tmpPath := destPath + ".download"
-	if err := os.MkdirAll(filepath.Dir(tmpPath), 0o755); err != nil {
-		return "", err
-	}
-	tmpFile, err := os.Create(tmpPath)
+func downloadAndExtract(ctx context.Context, rel *kernel.Release, asset kernel.Asset, destPath string, timeout time.Duration) (string, error) {
+	archive, err := kernel.Download(ctx, rel, asset, destPath, timeout)
 	if err != nil {
 		return "", err
 	}
+	defer os.Remove(archive)
 
-	written, err := io.Copy(tmpFile, resp.Body)
-	tmpFile.Close()
+	extracted := destPath + ".extracted"
+	defer os.Remove(extracted)
+	if strings.HasSuffix(strings.ToLower(asset.Name), ".zip") {
+		err = kernel.ExtractZip(archive, extracted, isMihomoBinary)
+	} else {
+		err = kernel.ExtractGzip(archive, extracted)
+	}
 	if err != nil {
-		os.Remove(tmpPath)
-		return "", fmt.Errorf("write download: %w", err)
+		return "", fmt.Errorf("extract %s: %w", asset.Name, err)
 	}
-	if written == 0 {
-		os.Remove(tmpPath)
-		return "", errors.New("downloaded file is empty")
-	}
-
-	// Extract if it's a zip/gz
-	extractedPath := destPath + ".extracted"
-	if err := extractAsset(tmpPath, extractedPath); err != nil {
-		// If extraction fails, assume it's a raw binary
-		os.Remove(extractedPath)
-		extractedPath = tmpPath
-	}
-
-	if runtime.GOOS == "windows" {
-		os.Remove(destPath)
-	}
-	if err := os.Rename(extractedPath, destPath); err != nil {
-		os.Remove(extractedPath)
-		if copyErr := copyFile(extractedPath, destPath); copyErr != nil {
-			return "", fmt.Errorf("activate binary: %w", copyErr)
-		}
-	}
-	os.Remove(tmpPath)
-	os.Remove(extractedPath)
-
-	if err := os.Chmod(destPath, 0o755); err != nil {
+	if err := kernel.Activate(extracted, destPath); err != nil {
 		return "", err
 	}
 	return destPath, nil
-}
-
-func extractAsset(srcPath string, destPath string) error {
-	// Try zip first
-	if r, err := zip.OpenReader(srcPath); err == nil {
-		defer r.Close()
-		for _, f := range r.File {
-			name := filepath.Base(f.Name)
-			// Look for the mihomo binary (with or without .exe)
-			if isMihomoBinary(name) {
-				src, err := f.Open()
-				if err != nil {
-					return err
-				}
-				defer src.Close()
-				dst, err := os.OpenFile(destPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
-				if err != nil {
-					return err
-				}
-				if _, err := io.Copy(dst, src); err != nil {
-					dst.Close()
-					return err
-				}
-				return dst.Close()
-			}
-		}
-		return errors.New("no mihomo binary found in zip")
-	}
-
-	// Try gz decompression
-	if strings.HasSuffix(strings.ToLower(srcPath), ".gz") {
-		f, err := os.Open(srcPath)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		gr, err := gzip.NewReader(f)
-		if err != nil {
-			return err
-		}
-		defer gr.Close()
-
-		out, err := os.OpenFile(destPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
-		if err != nil {
-			return err
-		}
-		if _, err := io.Copy(out, gr); err != nil {
-			out.Close()
-			return err
-		}
-		return out.Close()
-	}
-
-	return errors.New("not a supported archive format")
 }
 
 func isMihomoBinary(name string) bool {
@@ -592,19 +469,4 @@ func isMihomoBinary(name string) bool {
 		return strings.HasPrefix(lower, "mihomo") && strings.HasSuffix(lower, ".exe")
 	}
 	return strings.HasPrefix(lower, "mihomo") && !strings.HasSuffix(lower, ".exe") && !strings.HasSuffix(lower, ".gz") && !strings.HasSuffix(lower, ".zip")
-}
-
-func copyFile(src string, dst string) error {
-	sf, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer sf.Close()
-	df, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer df.Close()
-	_, err = io.Copy(df, sf)
-	return err
 }

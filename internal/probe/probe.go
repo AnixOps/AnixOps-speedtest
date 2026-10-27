@@ -33,34 +33,34 @@ const (
 )
 
 type Config struct {
-	Kernel        Kernel
-	Timeout       time.Duration
-	DownloadSize  int64
-	SkipLatency   bool
-	SkipSpeed     bool
-	SkipUnlock    bool
-	SkipTopo      bool
-	SkipIPRisk    bool
-	SkipDNS       bool
-	SkipSSH       bool
-	BinDir        string
+	Kernel       Kernel
+	Timeout      time.Duration
+	DownloadSize int64
+	SkipLatency  bool
+	SkipSpeed    bool
+	SkipUnlock   bool
+	SkipTopo     bool
+	SkipIPRisk   bool
+	SkipDNS      bool
+	SkipSSH      bool
+	BinDir       string
 }
 
 type NodeResult struct {
-	Index    int                    `json:"index"`
-	Name     string                 `json:"name"`
-	Type     string                 `json:"type"`
-	Server   string                 `json:"server"`
-	Port     int                    `json:"port"`
-	Latency  *LatencyResult         `json:"latency,omitempty"`
-	Speed    *SpeedResult           `json:"speed,omitempty"`
-	Unlocks  []checker.UnlockStatus `json:"unlocks,omitempty"`
-	IPRisk   *checker.IPRiskResult  `json:"ip_risk,omitempty"`
+	Index    int                      `json:"index"`
+	Name     string                   `json:"name"`
+	Type     string                   `json:"type"`
+	Server   string                   `json:"server"`
+	Port     int                      `json:"port"`
+	Latency  *LatencyResult           `json:"latency,omitempty"`
+	Speed    *SpeedResult             `json:"speed,omitempty"`
+	Unlocks  []checker.UnlockStatus   `json:"unlocks,omitempty"`
+	IPRisk   *checker.IPRiskResult    `json:"ip_risk,omitempty"`
 	DNS      *checker.DNSRegionResult `json:"dns,omitempty"`
-	SSH      *checker.SSHResult     `json:"ssh,omitempty"`
-	Topology *topo.TopologyResult   `json:"topology,omitempty"`
-	Error    string                 `json:"error,omitempty"`
-	Evidence []Evidence             `json:"evidence,omitempty"`
+	SSH      *checker.SSHResult       `json:"ssh,omitempty"`
+	Topology *topo.TopologyResult     `json:"topology,omitempty"`
+	Error    string                   `json:"error,omitempty"`
+	Evidence []Evidence               `json:"evidence,omitempty"`
 }
 
 type LatencyResult struct {
@@ -84,15 +84,15 @@ type TLSCertInfo struct {
 
 // Evidence records raw request/response data for independent verification.
 type Evidence struct {
-	Test       string            `json:"test"`
-	URL        string            `json:"url"`
-	Method     string            `json:"method"`
-	StatusCode int               `json:"status_code,omitempty"`
-	Headers    map[string]string `json:"headers,omitempty"`
-	Body       string            `json:"body,omitempty"`
+	Test       string             `json:"test"`
+	URL        string             `json:"url"`
+	Method     string             `json:"method"`
+	StatusCode int                `json:"status_code,omitempty"`
+	Headers    map[string]string  `json:"headers,omitempty"`
+	Body       string             `json:"body,omitempty"`
 	Timing     map[string]float64 `json:"timing_ms,omitempty"`
-	RawError   string            `json:"error,omitempty"`
-	TLSCert    *TLSCertInfo      `json:"tls_cert,omitempty"`
+	RawError   string             `json:"error,omitempty"`
+	TLSCert    *TLSCertInfo       `json:"tls_cert,omitempty"`
 }
 
 func certFingerprint(cert *x509.Certificate) string {
@@ -517,7 +517,9 @@ func runUnlockChecks(ctx context.Context, proxyURL string, timeout time.Duration
 	services := []func() (checker.UnlockStatus, checker.Evidence){
 		func() (checker.UnlockStatus, checker.Evidence) { return checker.CheckNetflix(ctx, proxyURL, timeout) },
 		func() (checker.UnlockStatus, checker.Evidence) { return checker.CheckYouTube(ctx, proxyURL, timeout) },
-		func() (checker.UnlockStatus, checker.Evidence) { return checker.CheckDisneyPlus(ctx, proxyURL, timeout) },
+		func() (checker.UnlockStatus, checker.Evidence) {
+			return checker.CheckDisneyPlus(ctx, proxyURL, timeout)
+		},
 		func() (checker.UnlockStatus, checker.Evidence) { return checker.CheckBilibili(ctx, proxyURL, timeout) },
 		func() (checker.UnlockStatus, checker.Evidence) { return checker.CheckOpenAI(ctx, proxyURL, timeout) },
 		func() (checker.UnlockStatus, checker.Evidence) { return checker.CheckClaude(ctx, proxyURL, timeout) },
@@ -679,4 +681,3 @@ func WriteCSV(w io.Writer, results []NodeResult) {
 		})
 	}
 }
-

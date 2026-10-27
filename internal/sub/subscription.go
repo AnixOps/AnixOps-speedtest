@@ -17,22 +17,22 @@ import (
 )
 
 type Node struct {
-	Protocol            string
-	Server              string
-	Port                string
-	Name                string
-	UUID                string
-	Password            string
-	Method              string
-	Network             string
-	Host                string
-	Path                string
-	TLS                 string
-	SNI                 string
-	RealityPublicKey    string
-	RealityShortID      string
-	ClientFingerprint   string
-	Flow                string
+	Protocol          string
+	Server            string
+	Port              string
+	Name              string
+	UUID              string
+	Password          string
+	Method            string
+	Network           string
+	Host              string
+	Path              string
+	TLS               string
+	SNI               string
+	RealityPublicKey  string
+	RealityShortID    string
+	ClientFingerprint string
+	Flow              string
 }
 
 func FetchAndParse(ctx context.Context, subscriptionURL string, userAgent string) ([]Node, error) {
