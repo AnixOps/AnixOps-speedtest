@@ -243,6 +243,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	cfg := probe.Config{
 		UnlockRules:   rules,
+		MihomoBatch:   mihomoBatch,
 		Kernel:        kernelMode,
 		Timeout:       timeout,
 		DownloadSize:  downloadSize,

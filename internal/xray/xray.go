@@ -125,17 +125,14 @@ func Start(ctx context.Context, binaryPath string, node NodeConfig, workDir stri
 		return "", nil, fmt.Errorf("failed to start xray-core: %w", err)
 	}
 
+	proc := kernel.Supervise(cmd, tmpDir)
 	waitCtx, cancel := context.WithTimeout(ctx, startupTimeout)
 	defer cancel()
-	if err := kernel.WaitForListener(waitCtx, socksAddr); err != nil {
-		cmd.Process.Kill()
-		cmd.Wait()
-		os.RemoveAll(tmpDir)
+	if err := proc.WaitReady(waitCtx, socksAddr); err != nil {
+		proc.Stop()
 		return "", nil, fmt.Errorf("waiting for socks listener: %w%s", err, stderrTail.Suffix())
 	}
-
-	stop := kernel.NewStopper(cmd, tmpDir)
-	return "socks5://" + socksAddr, stop, nil
+	return "socks5://" + socksAddr, proc.Stop, nil
 }
 
 func parseHostPort(listen string) (string, int, error) {

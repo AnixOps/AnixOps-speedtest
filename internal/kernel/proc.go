@@ -54,35 +54,83 @@ func ExecPath(p string) string {
 	return "." + string(filepath.Separator) + p
 }
 
-// NewStopper returns an idempotent function that kills cmd, reaps it and removes
-// cleanupDir. The kill we issue ourselves is not reported as an error.
-func NewStopper(cmd *exec.Cmd, cleanupDir string) func() error {
-	var once sync.Once
-	var result error
-	return func() error {
-		once.Do(func() {
-			var errs []error
-			killed := false
-			if cmd.Process != nil {
-				if err := cmd.Process.Kill(); err == nil {
-					killed = true
-				} else if !errors.Is(err, os.ErrProcessDone) {
-					errs = append(errs, err)
-				}
-			}
-			if err := cmd.Wait(); err != nil && !errors.Is(err, context.Canceled) {
-				var exitErr *exec.ExitError
-				if !(killed && errors.As(err, &exitErr)) {
-					errs = append(errs, err)
-				}
-			}
-			if err := os.RemoveAll(cleanupDir); err != nil {
+// Proc supervises a started kernel process: it reaps the process in the
+// background so startup can notice an early exit, and offers an idempotent Stop.
+type Proc struct {
+	cmd      *exec.Cmd
+	cleanup  string
+	exited   chan struct{}
+	waitErr  error
+	killed   bool
+	killMu   sync.Mutex
+	stopOnce sync.Once
+	stopErr  error
+}
+
+// Supervise starts reaping cmd (which must already be started). cleanupDir is
+// removed by Stop.
+func Supervise(cmd *exec.Cmd, cleanupDir string) *Proc {
+	p := &Proc{cmd: cmd, cleanup: cleanupDir, exited: make(chan struct{})}
+	go func() {
+		p.waitErr = cmd.Wait()
+		close(p.exited)
+	}()
+	return p
+}
+
+// WaitReady blocks until addr accepts connections. It returns early with an error
+// if the process exits first or ctx ends.
+func (p *Proc) WaitReady(ctx context.Context, addr string) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		select {
+		case <-p.exited:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	err := WaitForListener(ctx, addr)
+	if err != nil {
+		select {
+		case <-p.exited:
+			return fmt.Errorf("kernel exited before listening: %v", p.waitErr)
+		default:
+		}
+	}
+	return err
+}
+
+// Stop kills the process, waits for it and removes the cleanup dir. Idempotent.
+// A kill we issued ourselves is not reported as an error.
+func (p *Proc) Stop() error {
+	p.stopOnce.Do(func() {
+		var errs []error
+		if p.cmd.Process != nil {
+			if err := p.cmd.Process.Kill(); err == nil {
+				p.killMu.Lock()
+				p.killed = true
+				p.killMu.Unlock()
+			} else if !errors.Is(err, os.ErrProcessDone) {
 				errs = append(errs, err)
 			}
-			result = errors.Join(errs...)
-		})
-		return result
-	}
+		}
+		<-p.exited
+		p.killMu.Lock()
+		killed := p.killed
+		p.killMu.Unlock()
+		if err := p.waitErr; err != nil && !errors.Is(err, context.Canceled) {
+			var exitErr *exec.ExitError
+			if !(killed && errors.As(err, &exitErr)) {
+				errs = append(errs, err)
+			}
+		}
+		if err := os.RemoveAll(p.cleanup); err != nil {
+			errs = append(errs, err)
+		}
+		p.stopErr = errors.Join(errs...)
+	})
+	return p.stopErr
 }
 
 // TailBuffer is an io.Writer that keeps only the last Max bytes written, used to

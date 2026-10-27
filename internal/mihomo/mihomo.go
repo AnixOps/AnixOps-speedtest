@@ -90,17 +90,14 @@ func Start(ctx context.Context, binaryPath string, proxy clash.Proxy, workDir st
 		return "", nil, fmt.Errorf("failed to start mihomo: %w", err)
 	}
 
+	proc := kernel.Supervise(cmd, tmpDir)
 	waitCtx, cancel := context.WithTimeout(ctx, startupTimeout)
 	defer cancel()
-	if err := kernel.WaitForListener(waitCtx, fmt.Sprintf("127.0.0.1:%d", mixedPort)); err != nil {
-		cmd.Process.Kill()
-		cmd.Wait()
-		os.RemoveAll(tmpDir)
+	if err := proc.WaitReady(waitCtx, fmt.Sprintf("127.0.0.1:%d", mixedPort)); err != nil {
+		proc.Stop()
 		return "", nil, fmt.Errorf("waiting for mihomo listener: %w%s", err, stderrTail.Suffix())
 	}
-
-	stop := kernel.NewStopper(cmd, tmpDir)
-	return fmt.Sprintf("socks5://127.0.0.1:%d", mixedPort), stop, nil
+	return fmt.Sprintf("socks5://127.0.0.1:%d", mixedPort), proc.Stop, nil
 }
 
 type mihomoConfig struct {
@@ -516,18 +513,17 @@ func StartBatch(ctx context.Context, binaryPath string, proxies []clash.Proxy, w
 		os.RemoveAll(tmpDir)
 		return nil, nil, fmt.Errorf("failed to start mihomo: %w", err)
 	}
+	proc := kernel.Supervise(cmd, tmpDir)
 	waitCtx, cancel := context.WithTimeout(ctx, startupTimeout)
 	defer cancel()
 	urls := make([]string, len(ports))
 	for i, port := range ports {
 		addr := fmt.Sprintf("127.0.0.1:%d", port)
-		if err := kernel.WaitForListener(waitCtx, addr); err != nil {
-			cmd.Process.Kill()
-			cmd.Wait()
-			os.RemoveAll(tmpDir)
+		if err := proc.WaitReady(waitCtx, addr); err != nil {
+			proc.Stop()
 			return nil, nil, fmt.Errorf("waiting for mihomo batch listener: %w%s", err, tail.Suffix())
 		}
 		urls[i] = "socks5://" + addr
 	}
-	return urls, kernel.NewStopper(cmd, tmpDir), nil
+	return urls, proc.Stop, nil
 }

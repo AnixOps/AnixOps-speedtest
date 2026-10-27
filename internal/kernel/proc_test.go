@@ -48,11 +48,11 @@ func TestStopperKillsAndCleans(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Skip("sleep unavailable")
 	}
-	stop := NewStopper(cmd, dir)
-	if err := stop(); err != nil {
+	proc := Supervise(cmd, dir)
+	if err := proc.Stop(); err != nil {
 		t.Fatalf("stop: %v", err)
 	}
-	if err := stop(); err != nil {
+	if err := proc.Stop(); err != nil {
 		t.Fatalf("second stop must be a no-op: %v", err)
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
@@ -70,4 +70,19 @@ func TestTailBuffer(t *testing.T) {
 	if (&TailBuffer{Max: 5}).Suffix() != "" {
 		t.Fatal("empty buffer must give empty suffix")
 	}
+}
+
+func TestWaitReadyReturnsEarlyWhenProcessDies(t *testing.T) {
+	cmd := exec.Command("sh", "-c", "exit 3")
+	if err := cmd.Start(); err != nil {
+		t.Skip("sh unavailable")
+	}
+	proc := Supervise(cmd, t.TempDir())
+	addr, _ := ReservePort()
+	start := time.Now()
+	err := proc.WaitReady(context.Background(), addr)
+	if err == nil || time.Since(start) > 3*time.Second {
+		t.Fatalf("expected a fast failure, got %v after %v", err, time.Since(start))
+	}
+	proc.Stop()
 }
