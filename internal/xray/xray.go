@@ -117,9 +117,8 @@ func Start(ctx context.Context, binaryPath string, node NodeConfig, workDir stri
 
 	execPath := kernel.ExecPath(binaryPath)
 	cmd := exec.CommandContext(ctx, execPath, "-c", configPath)
-	cmd.Stdout = nil
 	stderrTail := &kernel.TailBuffer{Max: 2048}
-	cmd.Stderr = stderrTail
+	cmd.Stdout, cmd.Stderr = stderrTail, stderrTail
 	if err := cmd.Start(); err != nil {
 		os.RemoveAll(tmpDir)
 		return "", nil, fmt.Errorf("failed to start xray-core: %w", err)

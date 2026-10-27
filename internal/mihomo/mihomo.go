@@ -82,9 +82,8 @@ func Start(ctx context.Context, binaryPath string, proxy clash.Proxy, workDir st
 
 	execPath := kernel.ExecPath(binaryPath)
 	cmd := exec.CommandContext(ctx, execPath, "-d", tmpDir, "-f", configPath)
-	cmd.Stdout = nil
 	stderrTail := &kernel.TailBuffer{Max: 2048}
-	cmd.Stderr = stderrTail
+	cmd.Stdout, cmd.Stderr = stderrTail, stderrTail // mihomo logs fatal errors to stdout
 	if err := cmd.Start(); err != nil {
 		os.RemoveAll(tmpDir)
 		return "", nil, fmt.Errorf("failed to start mihomo: %w", err)
@@ -508,7 +507,7 @@ func StartBatch(ctx context.Context, binaryPath string, proxies []clash.Proxy, w
 
 	cmd := exec.CommandContext(ctx, kernel.ExecPath(binaryPath), "-d", tmpDir, "-f", configPath)
 	tail := &kernel.TailBuffer{Max: 2048}
-	cmd.Stderr = tail
+	cmd.Stdout, cmd.Stderr = tail, tail
 	if err := cmd.Start(); err != nil {
 		os.RemoveAll(tmpDir)
 		return nil, nil, fmt.Errorf("failed to start mihomo: %w", err)
