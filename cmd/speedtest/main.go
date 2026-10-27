@@ -79,6 +79,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		unlockTimeout   time.Duration
 		jsonlPath       string
 		quiet           bool
+		configPath      string
 	)
 
 	fs.StringVar(&configFile, "f", "", "path to Clash YAML config file")
@@ -116,7 +117,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&jsonlPath, "jsonl", "", "stream each node's result as a JSON line to this file as it completes (- for stdout)")
 	fs.BoolVar(&quiet, "q", false, "suppress progress logging")
 
+	fs.StringVar(&configPath, "config", "", "YAML file of option defaults, keyed by flag name (default: ./speedtest.yaml if present)")
+
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if err := applyConfigFile(fs, configPath); err != nil {
+		fmt.Fprintf(stderr, "error: %v\n", err)
 		return 2
 	}
 
