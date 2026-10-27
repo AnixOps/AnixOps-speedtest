@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -135,32 +136,83 @@ var ipAPICom = riskProvider{
 
 func parseIPAPIIs(body []byte) (string, ipFlags, bool) {
 	var d struct {
-		IP           string `json:"ip"`
-		IsDatacenter bool   `json:"is_datacenter"`
-		IsProxy      bool   `json:"is_proxy"`
-		IsVPN        bool   `json:"is_vpn"`
-		IsTor        bool   `json:"is_tor"`
-		IsAbuser     bool   `json:"is_abuser"`
-		Company      struct {
-			Name string `json:"name"`
-			Type string `json:"type"`
-		} `json:"company"`
-		Location struct {
+		IP           string          `json:"ip"`
+		IsDatacenter bool            `json:"is_datacenter"`
+		IsProxy      bool            `json:"is_proxy"`
+		IsVPN        bool            `json:"is_vpn"`
+		IsTor        bool            `json:"is_tor"`
+		IsAbuser     bool            `json:"is_abuser"`
+		Company      json.RawMessage `json:"company"` // string (free tier) or object
+		Country      string          `json:"country"`
+		Location     struct {
 			Country string `json:"country"`
 		} `json:"location"`
 	}
 	if json.Unmarshal(body, &d) != nil || d.IP == "" {
 		return "", ipFlags{}, false
 	}
+	var company struct {
+		Name string `json:"name"`
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(d.Company, &company) != nil {
+		_ = json.Unmarshal(d.Company, &company.Name) // plain string form
+	}
 	return d.IP, ipFlags{
-		Country:    d.Location.Country,
-		ISP:        d.Company.Name,
-		Datacenter: d.IsDatacenter || d.Company.Type == "hosting",
+		Country:    firstNonEmpty(d.Location.Country, d.Country),
+		ISP:        company.Name,
+		Datacenter: d.IsDatacenter || company.Type == "hosting",
 		Proxy:      d.IsProxy,
 		VPN:        d.IsVPN,
 		Tor:        d.IsTor,
 		Abuser:     d.IsAbuser,
 	}, true
+}
+
+var proxyCheck = riskProvider{
+	name: "proxycheck.io",
+	url: func(ip string) string {
+		return "https://proxycheck.io/v2/" + ip + "?vpn=1&asn=1"
+	},
+	parse: parseProxyCheck,
+}
+
+func parseProxyCheck(body []byte) (string, ipFlags, bool) {
+	var raw map[string]json.RawMessage
+	if json.Unmarshal(body, &raw) != nil {
+		return "", ipFlags{}, false
+	}
+	var status string
+	_ = json.Unmarshal(raw["status"], &status)
+	if status != "ok" && status != "warning" {
+		return "", ipFlags{}, false
+	}
+	for ip, v := range raw {
+		var d struct {
+			Provider string `json:"provider"`
+			ISOCode  string `json:"isocode"`
+			Proxy    string `json:"proxy"`
+			Type     string `json:"type"`
+		}
+		if net.ParseIP(ip) == nil || json.Unmarshal(v, &d) != nil {
+			continue
+		}
+		f := ipFlags{Country: d.ISOCode, ISP: d.Provider}
+		if strings.EqualFold(d.Proxy, "yes") {
+			switch strings.ToUpper(d.Type) {
+			case "VPN":
+				f.VPN = true
+			case "TOR":
+				f.Tor = true
+			case "HOSTING", "DCH", "SERVER":
+				f.Datacenter = true
+			default: // HTTP/SOCKS/Compromised Server/...
+				f.Proxy = true
+			}
+		}
+		return ip, f, true
+	}
+	return "", ipFlags{}, false
 }
 
 func parseIPAPICom(body []byte) (string, ipFlags, bool) {
@@ -233,7 +285,7 @@ func CheckIPRisk(ctx context.Context, proxyURL string, timeout time.Duration) (I
 			return cached, evidence
 		}
 	}
-	providers := []riskProvider{ipapiIs}
+	providers := []riskProvider{proxyCheck, ipapiIs}
 	if os.Getenv(AllowPlainHTTPGeoIPEnv) == "1" {
 		providers = append(providers, ipAPICom)
 	}
@@ -271,4 +323,13 @@ func parseIPInfoOrg(body []byte) IPRiskResult {
 		r.RiskScore, r.RiskLevel, r.ProxyType = 70, "high", "datacenter"
 	}
 	return r
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }

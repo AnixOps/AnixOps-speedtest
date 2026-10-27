@@ -84,3 +84,25 @@ func TestRiskCache(t *testing.T) {
 		t.Fatal("unexpected hit")
 	}
 }
+
+func TestParseProxyCheck(t *testing.T) {
+	body := []byte(`{"status":"ok","5.196.77.102":{"provider":"OVH SAS","isocode":"FR","proxy":"yes","type":"VPN"}}`)
+	ip, f, ok := parseProxyCheck(body)
+	if !ok || ip != "5.196.77.102" || !f.VPN || f.Country != "FR" || f.ISP != "OVH SAS" {
+		t.Fatalf("got %v %+v %v", ip, f, ok)
+	}
+	_, f, ok = parseProxyCheck([]byte(`{"status":"ok","1.1.1.1":{"proxy":"no"}}`))
+	if !ok || f.VPN || f.Proxy {
+		t.Fatalf("clean ip flagged: %+v", f)
+	}
+	if _, _, ok := parseProxyCheck([]byte(`{"status":"error","message":"x"}`)); ok {
+		t.Fatal("error status must be rejected")
+	}
+}
+
+func TestParseIPAPIIsFreeTierStringCompany(t *testing.T) {
+	ip, f, ok := parseIPAPIIs([]byte(`{"ip":"1.2.3.4","company":"OVH SAS","country":"France"}`))
+	if !ok || ip != "1.2.3.4" || f.ISP != "OVH SAS" || f.Country != "France" {
+		t.Fatalf("got %v %+v %v", ip, f, ok)
+	}
+}
