@@ -235,6 +235,24 @@ func parseLine(raw string) (Node, error) {
 	}
 }
 
+// flexString decodes a JSON string or number into a string; vmess links in the
+// wild encode "port" both ways.
+type flexString string
+
+func (f *flexString) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err == nil {
+		*f = flexString(s)
+		return nil
+	}
+	var n json.Number
+	if err := json.Unmarshal(b, &n); err != nil {
+		return err
+	}
+	*f = flexString(n.String())
+	return nil
+}
+
 func parseVmess(line string) (Node, error) {
 	payload := strings.TrimSpace(line[len("vmess://"):])
 	if payload == "" {
@@ -246,18 +264,18 @@ func parseVmess(line string) (Node, error) {
 	}
 
 	type vmessPayload struct {
-		PS       string `json:"ps"`
-		Add      string `json:"add"`
-		Port     string `json:"port"`
-		ID       string `json:"id"`
-		Security string `json:"security"`
-		Scy      string `json:"scy"`
-		Net      string `json:"net"`
-		Type     string `json:"type"`
-		Host     string `json:"host"`
-		Path     string `json:"path"`
-		TLS      string `json:"tls"`
-		SNI      string `json:"sni"`
+		PS       string     `json:"ps"`
+		Add      string     `json:"add"`
+		Port     flexString `json:"port"`
+		ID       string     `json:"id"`
+		Security string     `json:"security"`
+		Scy      string     `json:"scy"`
+		Net      string     `json:"net"`
+		Type     string     `json:"type"`
+		Host     string     `json:"host"`
+		Path     string     `json:"path"`
+		TLS      string     `json:"tls"`
+		SNI      string     `json:"sni"`
 	}
 
 	var p vmessPayload
@@ -273,7 +291,7 @@ func parseVmess(line string) (Node, error) {
 	return Node{
 		Protocol: "vmess",
 		Server:   p.Add,
-		Port:     p.Port,
+		Port:     string(p.Port),
 		Name:     p.PS,
 		UUID:     p.ID,
 		Method:   method,
@@ -308,6 +326,10 @@ func parseVless(line string) (Node, error) {
 	node.Host = q.Get("host")
 	node.TLS = firstNonEmpty(q.Get("security"), q.Get("tls"))
 	node.SNI = q.Get("sni")
+	node.Flow = q.Get("flow")
+	node.ClientFingerprint = q.Get("fp")
+	node.RealityPublicKey = q.Get("pbk")
+	node.RealityShortID = q.Get("sid")
 	return node, nil
 }
 
