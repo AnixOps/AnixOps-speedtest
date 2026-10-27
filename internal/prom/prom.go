@@ -25,6 +25,8 @@ func PushMetrics(endpointURL, job string, results []probe.NodeResult, accessID, 
 
 	fmt.Fprintf(&buf, "# TYPE speedtest_http_latency_ms gauge\n")
 	fmt.Fprintf(&buf, "# TYPE speedtest_tcp_latency_ms gauge\n")
+	fmt.Fprintf(&buf, "# TYPE speedtest_http_jitter_ms gauge\n")
+	fmt.Fprintf(&buf, "# TYPE speedtest_http_loss_pct gauge\n")
 	fmt.Fprintf(&buf, "# TYPE speedtest_node_up gauge\n")
 	fmt.Fprintf(&buf, "# TYPE speedtest_test_timestamp gauge\n")
 
@@ -50,6 +52,10 @@ func PushMetrics(endpointURL, job string, results []probe.NodeResult, accessID, 
 		if r.Latency != nil {
 			if r.Latency.HTTPMs > 0 {
 				buf.WriteString(fmt.Sprintf("speedtest_http_latency_ms%s %s\n", labels, formatFloat(r.Latency.HTTPMs)))
+			}
+			if r.Latency.Samples > 1 {
+				buf.WriteString(fmt.Sprintf("speedtest_http_jitter_ms%s %s\n", labels, formatFloat(r.Latency.HTTPJitterMs)))
+				buf.WriteString(fmt.Sprintf("speedtest_http_loss_pct%s %s\n", labels, formatFloat(r.Latency.HTTPLossPct)))
 			}
 			if r.Latency.TCPMs > 0 {
 				buf.WriteString(fmt.Sprintf("speedtest_tcp_latency_ms%s %s\n", labels, formatFloat(r.Latency.TCPMs)))

@@ -44,6 +44,8 @@ type Config struct {
 	SkipDNS      bool
 	SkipSSH      bool
 	BinDir       string
+	// Repeat is how many latency samples to take per node (<=1 means one).
+	Repeat int
 }
 
 type NodeResult struct {
@@ -66,6 +68,11 @@ type NodeResult struct {
 type LatencyResult struct {
 	HTTPMs float64 `json:"http_ms"`
 	TCPMs  float64 `json:"tcp_ms"`
+	// Populated when more than one sample was taken; HTTPMs/TCPMs then hold medians.
+	Samples      int     `json:"samples,omitempty"`
+	HTTPJitterMs float64 `json:"http_jitter_ms,omitempty"`
+	HTTPLossPct  float64 `json:"http_loss_pct,omitempty"`
+	TCPLossPct   float64 `json:"tcp_loss_pct,omitempty"`
 }
 
 type SpeedResult struct {
@@ -257,7 +264,7 @@ func testNode(ctx context.Context, idx int, p clash.Proxy, cfg Config, logger *l
 
 	// Latency
 	if !cfg.SkipLatency {
-		latResult, ev := measureLatency(ctx, proxyURL, cfg.Timeout)
+		latResult, ev := measureLatencyRepeated(ctx, proxyURL, cfg.Timeout, cfg.Repeat)
 		result.Latency = &latResult
 		allEvidence = append(allEvidence, ev...)
 	}
@@ -449,8 +456,11 @@ func measureSpeed(ctx context.Context, proxyURL string, timeout time.Duration, d
 		return SpeedResult{}, []Evidence{{Test: "speed", RawError: err.Error()}}
 	}
 
+	if downloadBytes <= 0 {
+		downloadBytes = 10 << 20
+	}
 	endpoints := []string{
-		"https://speed.cloudflare.com/__down?bytes=10000000",
+		fmt.Sprintf("https://speed.cloudflare.com/__down?bytes=%d", downloadBytes),
 		"https://speed.hetzner.de/10MB.bin",
 	}
 
@@ -563,6 +573,12 @@ func WriteTable(w io.Writer, results []NodeResult) {
 		httpMs := "-"
 		if r.Latency != nil && r.Latency.HTTPMs > 0 {
 			httpMs = strconv.FormatFloat(r.Latency.HTTPMs, 'f', 0, 64)
+			if r.Latency.Samples > 1 {
+				httpMs += fmt.Sprintf("±%.0f", r.Latency.HTTPJitterMs)
+				if r.Latency.HTTPLossPct > 0 {
+					httpMs += fmt.Sprintf(" L%.0f%%", r.Latency.HTTPLossPct)
+				}
+			}
 		}
 		tcpMs := "-"
 		if r.Latency != nil && r.Latency.TCPMs > 0 {
@@ -630,7 +646,8 @@ func WriteCSV(w io.Writer, results []NodeResult) {
 
 	cw.Write([]string{"index", "name", "type", "server", "port", "http_ms", "tcp_ms", "speed_mbps",
 		"netflix", "youtube", "disney+", "bilibili", "openai", "claude", "spotify", "tiktok", "wikipedia",
-		"ip_risk_score", "ip_risk_level", "dns_country", "ssh_22", "topology", "error"})
+		"ip_risk_score", "ip_risk_level", "dns_country", "ssh_22", "topology", "error",
+		"http_jitter_ms", "http_loss_pct"})
 
 	for _, r := range results {
 		httpMs := ""
@@ -671,13 +688,19 @@ func WriteCSV(w io.Writer, results []NodeResult) {
 			topoStr = topo.FormatTopo(*r.Topology)
 		}
 
+		jit, loss := "", ""
+		if r.Latency != nil && r.Latency.Samples > 1 {
+			jit = strconv.FormatFloat(r.Latency.HTTPJitterMs, 'f', 1, 64)
+			loss = strconv.FormatFloat(r.Latency.HTTPLossPct, 'f', 1, 64)
+		}
+
 		cw.Write([]string{
 			strconv.Itoa(r.Index), r.Name, r.Type, r.Server, strconv.Itoa(r.Port),
 			httpMs, tcpMs, speed,
 			unlockMap["netflix"], unlockMap["youtube premium"], unlockMap["disney+"],
 			unlockMap["bilibili"], unlockMap["openai"], unlockMap["claude"],
 			unlockMap["spotify"], unlockMap["tiktok"], unlockMap["wikipedia"],
-			ipScore, ipLevel, dns, ssh, topoStr, r.Error,
+			ipScore, ipLevel, dns, ssh, topoStr, r.Error, jit, loss,
 		})
 	}
 }

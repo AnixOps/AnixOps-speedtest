@@ -72,6 +72,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		latencyOnly     bool
 		pushgateway     string
 		promJob         string
+		repeat          int
+		redact          bool
 	)
 
 	fs.StringVar(&configFile, "f", "", "path to Clash YAML config file")
@@ -100,6 +102,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.BoolVar(&latencyOnly, "latency-only", false, "only test HTTP/TCP latency, skip all other checks")
 	fs.StringVar(&pushgateway, "pushgateway", "", "Prometheus Pushgateway URL (e.g. http://host:9091)")
 	fs.StringVar(&promJob, "prom-job", "speedtest", "Prometheus job name for Pushgateway")
+
+	fs.IntVar(&repeat, "repeat", 1, "latency samples per node; >1 reports median, jitter and loss")
+	fs.BoolVar(&redact, "redact", false, "mask server/exit/entry IPs and drop raw evidence so the report is safe to share")
 
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -209,9 +214,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 		SkipDNS:      skipDNS,
 		SkipSSH:      skipSSH,
 		BinDir:       binDir,
+		Repeat:       repeat,
 	}
 
 	results := probe.RunAll(ctx, proxies, cfg, concurrency, logger)
+	if redact {
+		results = probe.Redact(results)
+	}
 
 	// Push to Prometheus Pushgateway
 	if pushgateway != "" {
@@ -402,7 +411,8 @@ func loadEnvFile() {
 			if len(val) >= 2 && val[0] == '"' && val[len(val)-1] == '"' {
 				val = val[1 : len(val)-1]
 			}
-			if key != "" {
+			// Real environment wins over the .env file.
+			if _, set := os.LookupEnv(key); key != "" && !set {
 				os.Setenv(key, val)
 			}
 		}
