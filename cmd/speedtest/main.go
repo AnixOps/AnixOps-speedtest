@@ -19,13 +19,18 @@ import (
 	"github.com/anixops/speedtest/internal/ats"
 	"github.com/anixops/speedtest/internal/chart"
 	"github.com/anixops/speedtest/internal/clash"
-	"github.com/anixops/speedtest/internal/prom"
 	"github.com/anixops/speedtest/internal/probe"
+	"github.com/anixops/speedtest/internal/prom"
 	"github.com/anixops/speedtest/internal/sub"
 	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
 )
 
-const version = "v0.1.0"
+// Set at build time via -ldflags "-X main.version=... -X main.commit=... -X main.date=...".
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
 
 func main() {
 	loadEnvFile()
@@ -101,7 +106,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if showVersion {
-		fmt.Fprintln(stdout, version)
+		fmt.Fprintf(stdout, "%s (commit %s, built %s)\n", version, commit, date)
 		return 0
 	}
 
@@ -193,17 +198,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	cfg := probe.Config{
-		Kernel:        kernelMode,
-		Timeout:       timeout,
-		DownloadSize:  downloadSize,
-		SkipLatency:   skipLatency,
-		SkipSpeed:     skipSpeed,
-		SkipUnlock:    skipUnlock,
-		SkipTopo:      skipTopo,
-		SkipIPRisk:    skipIPRisk,
-		SkipDNS:       skipDNS,
-		SkipSSH:       skipSSH,
-		BinDir:        binDir,
+		Kernel:       kernelMode,
+		Timeout:      timeout,
+		DownloadSize: downloadSize,
+		SkipLatency:  skipLatency,
+		SkipSpeed:    skipSpeed,
+		SkipUnlock:   skipUnlock,
+		SkipTopo:     skipTopo,
+		SkipIPRisk:   skipIPRisk,
+		SkipDNS:      skipDNS,
+		SkipSSH:      skipSSH,
+		BinDir:       binDir,
 	}
 
 	results := probe.RunAll(ctx, proxies, cfg, concurrency, logger)

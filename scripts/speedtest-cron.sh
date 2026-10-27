@@ -17,16 +17,16 @@
 set -euo pipefail
 
 # === Configuration ===
-SPEEDTEST_BIN="${SPEEDTEST_BIN:-/root/AnixOps/speedtest/speedtest-linux-amd64}"
-PUSHGATEWAY="${PUSHGATEWAY:-http://10.100.0.122:9091}"
-PROM_JOB="${PROM_JOB:-speedtest-cn}"
-KERNEL="${KERNEL:-xray}"
+SPEEDTEST_BIN="${SPEEDTEST_BIN:-./speedtest}"
+PUSHGATEWAY="${PUSHGATEWAY:-http://127.0.0.1:9091}"
+PROM_JOB="${PROM_JOB:-speedtest}"
+KERNEL="${KERNEL:-mihomo}"
 CONCURRENCY="${CONCURRENCY:-5}"
 TIMEOUT="${TIMEOUT:-10s}"
 
 # First arg is config file, or use subscription URL
 CONFIG_FILE="${1:-}"
-SUB_URL="${SUB_URL:-https://x.kalijerry.uk/api/v1/client/subscribe?token=00debf0dc792365eab40cf969a10d48b}"
+SUB_URL="${SUB_URL:-}"
 
 if [ -n "$CONFIG_FILE" ]; then
   MODE="-f ${CONFIG_FILE}"

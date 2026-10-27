@@ -342,4 +342,3 @@ func TestHybridCertificate(t *testing.T) {
 		t.Fatalf("ML-DSA: %v", err)
 	}
 }
-
