@@ -46,18 +46,17 @@ func Start(ctx context.Context, binaryPath string, proxy clash.Proxy, workDir st
 		return "", nil, fmt.Errorf("startup timeout must be > 0, got %s", startupTimeout)
 	}
 
-	socksPort, err := reservePort()
-	if err != nil {
-		return "", nil, err
+	var ports [3]int
+	for i := range ports {
+		addr, err := kernel.ReservePort()
+		if err != nil {
+			return "", nil, err
+		}
+		if ports[i], err = portOf(addr); err != nil {
+			return "", nil, err
+		}
 	}
-	httpPort, err := reservePort()
-	if err != nil {
-		return "", nil, err
-	}
-	mixedPort, err := reservePort()
-	if err != nil {
-		return "", nil, err
-	}
+	socksPort, httpPort, mixedPort := ports[0], ports[1], ports[2]
 
 	if workDir != "" {
 		if err := os.MkdirAll(workDir, 0o755); err != nil {
@@ -81,7 +80,7 @@ func Start(ctx context.Context, binaryPath string, proxy clash.Proxy, workDir st
 		return "", nil, fmt.Errorf("failed to write config: %w", err)
 	}
 
-	execPath := normalizePath(binaryPath)
+	execPath := kernel.ExecPath(binaryPath)
 	cmd := exec.CommandContext(ctx, execPath, "-d", tmpDir, "-f", configPath)
 	cmd.Stdout = nil
 	cmd.Stderr = nil
@@ -92,14 +91,14 @@ func Start(ctx context.Context, binaryPath string, proxy clash.Proxy, workDir st
 
 	waitCtx, cancel := context.WithTimeout(ctx, startupTimeout)
 	defer cancel()
-	if err := waitForListener(waitCtx, fmt.Sprintf("127.0.0.1:%d", mixedPort)); err != nil {
+	if err := kernel.WaitForListener(waitCtx, fmt.Sprintf("127.0.0.1:%d", mixedPort)); err != nil {
 		cmd.Process.Kill()
 		cmd.Wait()
 		os.RemoveAll(tmpDir)
 		return "", nil, fmt.Errorf("waiting for mihomo listener: %w", err)
 	}
 
-	stop := makeStopper(cmd, tmpDir)
+	stop := kernel.NewStopper(cmd, tmpDir)
 	return fmt.Sprintf("socks5://127.0.0.1:%d", mixedPort), stop, nil
 }
 
@@ -213,91 +212,6 @@ func buildConfig(proxy clash.Proxy, socksPort, httpPort, mixedPort int) ([]byte,
 	}
 
 	return yaml.Marshal(cfg)
-}
-
-func reservePort() (int, error) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return 0, fmt.Errorf("reserve port: %w", err)
-	}
-	addr := ln.Addr().String()
-	ln.Close()
-	_, portStr, _ := net.SplitHostPort(addr)
-	port, _ := strconv.Atoi(portStr)
-	return port, nil
-}
-
-func waitForListener(ctx context.Context, addr string) error {
-	var dialer net.Dialer
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		conn, err := dialer.DialContext(ctx, "tcp", addr)
-		if err == nil {
-			conn.Close()
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-			continue
-		}
-	}
-}
-
-func makeStopper(cmd *exec.Cmd, cleanupDir string) func() error {
-	var once sync.Once
-	return func() error {
-		var combined error
-		once.Do(func() {
-			if cmd.Process != nil {
-				if err := cmd.Process.Kill(); err != nil {
-					if !errorIs(err, os.ErrProcessDone) {
-						combined = err
-					}
-				}
-			}
-			if err := cmd.Wait(); err != nil && !errorIs(err, context.Canceled) {
-				if combined == nil {
-					combined = err
-				}
-			}
-			if err := os.RemoveAll(cleanupDir); err != nil {
-				if combined == nil {
-					combined = err
-				}
-			}
-		})
-		return combined
-	}
-}
-
-func errorIs(err error, target error) bool {
-	if err == nil || target == nil {
-		return false
-	}
-	if err == target {
-		return true
-	}
-	if e, ok := err.(*exec.ExitError); ok && e != nil {
-		return false
-	}
-	return strings.Contains(err.Error(), target.Error())
-}
-
-func normalizePath(p string) string {
-	p = strings.TrimSpace(p)
-	if p == "" {
-		return ""
-	}
-	if filepath.IsAbs(p) {
-		return p
-	}
-	if strings.ContainsAny(p, `/\`) {
-		return p
-	}
-	return "." + string(filepath.Separator) + p
 }
 
 func DefaultBinaryName() string {
@@ -469,4 +383,12 @@ func isMihomoBinary(name string) bool {
 		return strings.HasPrefix(lower, "mihomo") && strings.HasSuffix(lower, ".exe")
 	}
 	return strings.HasPrefix(lower, "mihomo") && !strings.HasSuffix(lower, ".exe") && !strings.HasSuffix(lower, ".gz") && !strings.HasSuffix(lower, ".zip")
+}
+
+func portOf(addr string) (int, error) {
+	_, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.Atoi(portStr)
 }

@@ -88,7 +88,7 @@ func Start(ctx context.Context, binaryPath string, node NodeConfig, workDir stri
 		return "", nil, fmt.Errorf("startup timeout must be > 0, got %s", startupTimeout)
 	}
 
-	socksAddr, err := reserveLocalPort()
+	socksAddr, err := kernel.ReservePort()
 	if err != nil {
 		return "", nil, err
 	}
@@ -115,7 +115,7 @@ func Start(ctx context.Context, binaryPath string, node NodeConfig, workDir stri
 		return "", nil, fmt.Errorf("failed to write config: %w", err)
 	}
 
-	execPath := normalizeExecutablePathForExec(binaryPath)
+	execPath := kernel.ExecPath(binaryPath)
 	cmd := exec.CommandContext(ctx, execPath, "-c", configPath)
 	cmd.Stdout = nil
 	cmd.Stderr = nil
@@ -126,87 +126,15 @@ func Start(ctx context.Context, binaryPath string, node NodeConfig, workDir stri
 
 	waitCtx, cancel := context.WithTimeout(ctx, startupTimeout)
 	defer cancel()
-	if err := waitForListener(waitCtx, socksAddr); err != nil {
+	if err := kernel.WaitForListener(waitCtx, socksAddr); err != nil {
 		cmd.Process.Kill()
 		cmd.Wait()
 		os.RemoveAll(tmpDir)
 		return "", nil, fmt.Errorf("waiting for socks listener: %w", err)
 	}
 
-	stop := makeStopper(cmd, tmpDir)
+	stop := kernel.NewStopper(cmd, tmpDir)
 	return "socks5://" + socksAddr, stop, nil
-}
-
-func makeStopper(cmd *exec.Cmd, cleanupDir string) func() error {
-	var once sync.Once
-	return func() error {
-		var combined error
-		once.Do(func() {
-			killedByStopper := false
-			if cmd.Process != nil {
-				if err := cmd.Process.Kill(); err != nil {
-					if !errors.Is(err, os.ErrProcessDone) {
-						combined = err
-					}
-				} else {
-					killedByStopper = true
-				}
-			}
-			if err := cmd.Wait(); err != nil && !errors.Is(err, context.Canceled) {
-				if !(killedByStopper && isExitError(err)) {
-					combined = wrapErr(combined, err)
-				}
-			}
-			if err := os.RemoveAll(cleanupDir); err != nil {
-				combined = wrapErr(combined, err)
-			}
-		})
-		return combined
-	}
-}
-
-func wrapErr(existing, newErr error) error {
-	if newErr == nil {
-		return existing
-	}
-	if existing == nil {
-		return newErr
-	}
-	return fmt.Errorf("%v; %w", existing, newErr)
-}
-
-func isExitError(err error) bool {
-	var exitErr *exec.ExitError
-	return errors.As(err, &exitErr)
-}
-
-func waitForListener(ctx context.Context, addr string) error {
-	var dialer net.Dialer
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		conn, err := dialer.DialContext(ctx, "tcp", addr)
-		if err == nil {
-			conn.Close()
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-			continue
-		}
-	}
-}
-
-func reserveLocalPort() (string, error) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return "", fmt.Errorf("reserve local port: %w", err)
-	}
-	addr := ln.Addr().String()
-	ln.Close()
-	return addr, nil
 }
 
 func parseHostPort(listen string) (string, int, error) {
@@ -225,20 +153,6 @@ func parseHostPort(listen string) (string, int, error) {
 		host = "0.0.0.0"
 	}
 	return host, port, nil
-}
-
-func normalizeExecutablePathForExec(binaryPath string) string {
-	path := strings.TrimSpace(binaryPath)
-	if path == "" {
-		return ""
-	}
-	if filepath.IsAbs(path) {
-		return path
-	}
-	if strings.ContainsAny(path, `/\`) {
-		return path
-	}
-	return "." + string(filepath.Separator) + path
 }
 
 func DefaultBinaryName() string {
