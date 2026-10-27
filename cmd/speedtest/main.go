@@ -19,6 +19,7 @@ import (
 
 	"github.com/anixops/speedtest/internal/ats"
 	"github.com/anixops/speedtest/internal/chart"
+	"github.com/anixops/speedtest/internal/checker"
 	"github.com/anixops/speedtest/internal/clash"
 	"github.com/anixops/speedtest/internal/probe"
 	"github.com/anixops/speedtest/internal/prom"
@@ -80,6 +81,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		jsonlPath       string
 		quiet           bool
 		configPath      string
+		unlockRules     string
 	)
 
 	fs.StringVar(&configFile, "f", "", "path to Clash YAML config file")
@@ -117,6 +119,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&jsonlPath, "jsonl", "", "stream each node's result as a JSON line to this file as it completes (- for stdout)")
 	fs.BoolVar(&quiet, "q", false, "suppress progress logging")
 
+	fs.StringVar(&unlockRules, "unlock-rules", "", "YAML file that overrides/extends the built-in unlock rules")
 	fs.StringVar(&configPath, "config", "", "YAML file of option defaults, keyed by flag name (default: ./speedtest.yaml if present)")
 
 	if err := fs.Parse(args); err != nil {
@@ -223,7 +226,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		skipSSH = true
 	}
 
+	rules, err := checker.LoadRules(unlockRules)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: %v\n", err)
+		return 2
+	}
+
 	cfg := probe.Config{
+		UnlockRules:   rules,
 		Kernel:        kernelMode,
 		Timeout:       timeout,
 		DownloadSize:  downloadSize,

@@ -50,6 +50,8 @@ type Config struct {
 	// 3x Timeout for the download, Timeout for unlock checks).
 	SpeedTimeout  time.Duration
 	UnlockTimeout time.Duration
+	// UnlockRules overrides the built-in unlock rules when non-nil.
+	UnlockRules []checker.Rule
 	// OnResult, when set, receives each node's result as soon as it finishes.
 	// Calls are serialized.
 	OnResult func(NodeResult)
@@ -326,7 +328,7 @@ func testNode(ctx context.Context, idx int, p clash.Proxy, cfg Config, logger *l
 		if unlockTimeout <= 0 {
 			unlockTimeout = cfg.Timeout
 		}
-		unlocks, ev := runUnlockChecks(ctx, proxyURL, unlockTimeout)
+		unlocks, ev := runUnlockChecks(ctx, proxyURL, unlockTimeout, cfg.UnlockRules)
 		result.Unlocks = unlocks
 		allEvidence = append(allEvidence, ev...)
 	}
@@ -570,39 +572,15 @@ func mbpsFromBytes(bytes int64, elapsed time.Duration) float64 {
 	return float64(bytes*8) / elapsed.Seconds() / 1_000_000
 }
 
-func runUnlockChecks(ctx context.Context, proxyURL string, timeout time.Duration) ([]checker.UnlockStatus, []Evidence) {
-	var unlocks []checker.UnlockStatus
-	var evidence []Evidence
-
-	services := []func() (checker.UnlockStatus, checker.Evidence){
-		func() (checker.UnlockStatus, checker.Evidence) { return checker.CheckNetflix(ctx, proxyURL, timeout) },
-		func() (checker.UnlockStatus, checker.Evidence) { return checker.CheckYouTube(ctx, proxyURL, timeout) },
-		func() (checker.UnlockStatus, checker.Evidence) {
-			return checker.CheckDisneyPlus(ctx, proxyURL, timeout)
-		},
-		func() (checker.UnlockStatus, checker.Evidence) { return checker.CheckBilibili(ctx, proxyURL, timeout) },
-		func() (checker.UnlockStatus, checker.Evidence) { return checker.CheckOpenAI(ctx, proxyURL, timeout) },
-		func() (checker.UnlockStatus, checker.Evidence) { return checker.CheckClaude(ctx, proxyURL, timeout) },
-		func() (checker.UnlockStatus, checker.Evidence) { return checker.CheckSpotify(ctx, proxyURL, timeout) },
-		func() (checker.UnlockStatus, checker.Evidence) { return checker.CheckTiktok(ctx, proxyURL, timeout) },
-		func() (checker.UnlockStatus, checker.Evidence) { return checker.CheckWikipedia(ctx, proxyURL, timeout) },
+func runUnlockChecks(ctx context.Context, proxyURL string, timeout time.Duration, rules []checker.Rule) ([]checker.UnlockStatus, []Evidence) {
+	if rules == nil {
+		rules = checker.DefaultRules()
 	}
-
-	for _, fn := range services {
-		u, ev := fn()
-		unlocks = append(unlocks, u)
-		evidence = append(evidence, Evidence{
-			Test:       ev.Test,
-			URL:        ev.URL,
-			Method:     ev.Method,
-			StatusCode: ev.StatusCode,
-			Headers:    ev.Headers,
-			Body:       ev.Body,
-			Timing:     ev.Timing,
-			RawError:   ev.RawError,
-		})
+	unlocks, evs := checker.RunUnlockChecks(ctx, proxyURL, timeout, rules)
+	evidence := make([]Evidence, len(evs))
+	for i, ev := range evs {
+		evidence[i] = evidenceFromChecker(ev)
 	}
-
 	return unlocks, evidence
 }
 

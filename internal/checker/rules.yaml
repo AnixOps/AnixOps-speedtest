@@ -1,0 +1,116 @@
+# Built-in streaming/service unlock rules. Override or extend with -unlock-rules <file>:
+# a rule in your file replaces a built-in rule with the same `service` name; new names are appended.
+#
+# A rule fetches `url`, then evaluates `steps` in order; the first step whose `when`
+# conditions ALL hold decides the result. If none match, `otherwise` is used.
+# `fallback` is another fetch tried when the first result is "error" or "no".
+#
+# when:  status [codes]            HTTP status is one of these
+#        url_contains [s]          final URL (after redirects) contains any (case-insensitive)
+#        body_contains [s]         body contains any (case-insensitive)
+#        body_not_contains [s]     body contains none (case-insensitive)
+#        header_contains {H: s}    each header contains s (case-insensitive)
+#        json_equals {key: v}      top-level JSON keys equal v
+# then:  status yes|no|partial|error, detail ("{status}" is substituted),
+#        region | region_header | region_regex (capture group 1 on the body),
+#        confidence high|medium|low
+- service: Netflix
+  url: https://www.netflix.com/title/80018499
+  steps:
+    - when: {status: [200, 301, 302]}
+      then: {status: yes, region_regex: '"currentCountry"\s*:\s*"([A-Z]{2})"', confidence: medium, detail: "title page reachable; originals-only lock not distinguished"}
+    - when: {status: [403]}
+      then: {status: no, confidence: high}
+  otherwise: {status: error, detail: "status {status}"}
+
+- service: YouTube Premium
+  url: https://www.youtube.com/premium
+  steps:
+    - when: {status: [200], body_contains: [premium]}
+      then: {status: yes, region_regex: '"GL"\s*:\s*"([A-Z]{2})"', confidence: medium}
+    - when: {status: [200]}
+      then: {status: partial, detail: "accessible but Premium info not found", confidence: low}
+  otherwise: {status: no, detail: "status {status}"}
+
+- service: Disney+
+  url: https://www.disneyplus.com
+  steps:
+    - when: {status: [200, 301, 302], url_contains: [unavailable, not-available]}
+      then: {status: no, detail: region not supported, confidence: high}
+    - when: {status: [200], body_contains: [disney]}
+      then: {status: yes, confidence: medium}
+    - when: {status: [200]}
+      then: {status: partial, detail: page loaded but content unexpected, confidence: low}
+    - when: {status: [301, 302]}
+      then: {status: yes, confidence: low}
+    - when: {status: [403]}
+      then: {status: no, detail: blocked by Disney+, confidence: medium}
+  otherwise: {status: error, detail: "status {status}"}
+  fallback:
+    url: https://disney.api.edge.bamgrid.com/devices
+    headers:
+      Accept: "application/json; charset=utf-8"
+      Content-Type: application/json
+      Authorization: Bearer ZGlzbmV5JmJyb3dzZXImMS4wLjA.Cu56AgSfBTDag5NiRA81oLHkDZfu5L3CKadnefEAYB4
+    steps:
+      - when: {status: [200, 201, 401]}
+        then: {status: yes, detail: accessible (API reachable), confidence: medium}
+      - when: {status: [403]}
+        then: {status: no, confidence: medium}
+    otherwise: {status: error, detail: "status {status}"}
+
+- service: Bilibili
+  url: https://api.bilibili.com/pgc/player/web/playurl?avid=2&cid=3&qn=0
+  steps:
+    - when: {status: [200], json_equals: {code: 0}}
+      then: {status: yes, region: CN, confidence: medium}
+    - when: {status: [200]}
+      then: {status: no, detail: "API refused the request", confidence: medium}
+  otherwise: {status: no, detail: "status {status}"}
+
+- service: OpenAI
+  url: https://chat.openai.com/
+  steps:
+    - when: {status: [200]}
+      then: {status: yes, region_header: Cf-Ipcountry, confidence: medium}
+    - when: {status: [403], body_contains: [unsupported_country, "not available"]}
+      then: {status: no, detail: country not supported, confidence: high}
+    - when: {status: [403]}
+      then: {status: no, detail: "blocked (possibly a Cloudflare challenge, not a region lock)", confidence: low}
+  otherwise: {status: error, detail: "status {status}"}
+
+- service: Claude
+  url: https://claude.ai/
+  steps:
+    - when: {status: [200]}
+      then: {status: yes, region_header: Cf-Ipcountry, confidence: medium}
+    - when: {status: [403]}
+      then: {status: no, confidence: low, detail: "blocked (possibly a Cloudflare challenge, not a region lock)"}
+  otherwise: {status: error, detail: "status {status}"}
+
+- service: Spotify
+  url: https://www.spotify.com/
+  steps:
+    - when: {status: [200]}
+      then: {status: yes, confidence: medium}
+    - when: {status: [403]}
+      then: {status: no, confidence: medium}
+  otherwise: {status: error, detail: "status {status}"}
+
+- service: Tiktok
+  url: https://www.tiktok.com/
+  steps:
+    - when: {status: [200]}
+      then: {status: yes, confidence: medium}
+    - when: {status: [403]}
+      then: {status: no, confidence: medium}
+  otherwise: {status: error, detail: "status {status}"}
+
+- service: Wikipedia
+  url: https://zh.wikipedia.org/
+  steps:
+    - when: {status: [200]}
+      then: {status: yes, confidence: high}
+    - when: {status: [403]}
+      then: {status: no, confidence: high}
+  otherwise: {status: error, detail: "status {status}"}
