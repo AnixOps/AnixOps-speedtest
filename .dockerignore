@@ -1,0 +1,6 @@
+.git
+bin
+output
+.keys
+.env
+dist
