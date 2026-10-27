@@ -33,6 +33,9 @@ type Node struct {
 	RealityShortID    string
 	ClientFingerprint string
 	Flow              string
+	// Extra carries protocol-specific options (hysteria2, tuic, ...) verbatim, using
+	// Clash/mihomo key names, so the mihomo kernel can consume them unchanged.
+	Extra map[string]any
 }
 
 func FetchAndParse(ctx context.Context, subscriptionURL string, userAgent string) ([]Node, error) {
@@ -216,7 +219,32 @@ func parseClashProxy(p map[string]any) Node {
 		node.Network = "tcp"
 	}
 
+	switch proto {
+	case "vmess", "vless", "trojan", "ss", "shadowsocks":
+	default:
+		node.Extra = clashExtras(p)
+	}
+
 	return node
+}
+
+// clashHandled lists keys already mapped onto Node fields.
+var clashHandled = map[string]bool{
+	"name": true, "type": true, "server": true, "port": true, "uuid": true, "password": true,
+	"cipher": true, "network": true, "servername": true, "sni": true, "tls": true,
+}
+
+func clashExtras(p map[string]any) map[string]any {
+	extra := map[string]any{}
+	for k, v := range p {
+		if !clashHandled[k] {
+			extra[k] = v
+		}
+	}
+	if sni, ok := p["sni"].(string); ok && sni != "" {
+		extra["sni"] = sni
+	}
+	return extra
 }
 
 func parseLine(raw string) (Node, error) {
@@ -230,6 +258,10 @@ func parseLine(raw string) (Node, error) {
 		return parseTrojan(line)
 	case strings.HasPrefix(strings.ToLower(line), "ss://"):
 		return parseShadowsocks(line)
+	case strings.HasPrefix(strings.ToLower(line), "hysteria2://"), strings.HasPrefix(strings.ToLower(line), "hy2://"):
+		return parseHysteria2(line)
+	case strings.HasPrefix(strings.ToLower(line), "tuic://"):
+		return parseTUIC(line)
 	default:
 		return Node{}, errors.New("unsupported scheme")
 	}
@@ -429,6 +461,91 @@ func parseShadowsocks(line string) (Node, error) {
 		Name:     name,
 		Password: password,
 		Method:   method,
+	}, nil
+}
+
+func truthy(v string) bool {
+	switch strings.ToLower(v) {
+	case "1", "true", "yes":
+		return true
+	}
+	return false
+}
+
+func parseHysteria2(line string) (Node, error) {
+	u, err := url.Parse(line)
+	if err != nil {
+		return Node{}, err
+	}
+	if u.User == nil || u.Hostname() == "" {
+		return Node{}, errors.New("hysteria2: missing auth or host")
+	}
+	pw := u.User.Username()
+	if p, ok := u.User.Password(); ok { // "user:pass" form
+		pw += ":" + p
+	}
+	port := u.Port()
+	if port == "" {
+		port = "443"
+	}
+	q := u.Query()
+	extra := map[string]any{}
+	if truthy(firstNonEmpty(q.Get("insecure"), q.Get("allowInsecure"))) {
+		extra["skip-cert-verify"] = true
+	}
+	if v := q.Get("obfs"); v != "" {
+		extra["obfs"] = v
+		extra["obfs-password"] = q.Get("obfs-password")
+	}
+	if v := q.Get("alpn"); v != "" {
+		extra["alpn"] = strings.Split(v, ",")
+	}
+	if v := q.Get("pinSHA256"); v != "" {
+		extra["fingerprint"] = v
+	}
+	return Node{
+		Protocol: "hysteria2",
+		Server:   u.Hostname(),
+		Port:     port,
+		Name:     decodeFragment(u.Fragment),
+		Password: pw,
+		SNI:      q.Get("sni"),
+		Extra:    extra,
+	}, nil
+}
+
+func parseTUIC(line string) (Node, error) {
+	u, err := url.Parse(line)
+	if err != nil {
+		return Node{}, err
+	}
+	if u.User == nil || u.Hostname() == "" {
+		return Node{}, errors.New("tuic: missing auth or host")
+	}
+	pw, _ := u.User.Password()
+	q := u.Query()
+	extra := map[string]any{}
+	if v := firstNonEmpty(q.Get("congestion_control"), q.Get("congestion-controller")); v != "" {
+		extra["congestion-controller"] = v
+	}
+	if v := firstNonEmpty(q.Get("udp_relay_mode"), q.Get("udp-relay-mode")); v != "" {
+		extra["udp-relay-mode"] = v
+	}
+	if v := q.Get("alpn"); v != "" {
+		extra["alpn"] = strings.Split(v, ",")
+	}
+	if truthy(firstNonEmpty(q.Get("allow_insecure"), q.Get("insecure"))) {
+		extra["skip-cert-verify"] = true
+	}
+	return Node{
+		Protocol: "tuic",
+		Server:   u.Hostname(),
+		Port:     u.Port(),
+		Name:     decodeFragment(u.Fragment),
+		UUID:     u.User.Username(),
+		Password: pw,
+		SNI:      q.Get("sni"),
+		Extra:    extra,
 	}, nil
 }
 

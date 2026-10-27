@@ -374,6 +374,7 @@ func subNodeToClashProxy(n sub.Node) clash.Proxy {
 		RealityOpts:       realityOpts,
 		ClientFingerprint: n.ClientFingerprint,
 		Flow:              n.Flow,
+		Extra:             n.Extra,
 	}
 
 	if p.Type == "ss" {

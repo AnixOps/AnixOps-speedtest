@@ -1,6 +1,8 @@
 package mihomo
 
 import (
+	"github.com/anixops/speedtest/internal/clash"
+	"gopkg.in/yaml.v3"
 	"testing"
 
 	"github.com/anixops/speedtest/internal/kernel"
@@ -22,5 +24,26 @@ func TestSelectAssetPrefersCompatibleGz(t *testing.T) {
 	}
 	if _, ok := selectAsset(assets, "plan9", "amd64"); ok {
 		t.Fatal("unsupported platform must not match")
+	}
+}
+
+func TestBuildConfigForwardsExtraOptions(t *testing.T) {
+	p := clash.Proxy{
+		Name: "h", Type: "hysteria2", Server: "h.com", Port: 443, Password: "pw", SNI: "h.com",
+		Extra: map[string]any{"obfs": "salamander", "obfs-password": "op", "name": "must-not-override"},
+	}
+	out, err := buildConfig(p, 1, 2, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		Proxies []map[string]any `yaml:"proxies"`
+	}
+	if err := yaml.Unmarshal(out, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	e := cfg.Proxies[0]
+	if e["type"] != "hysteria2" || e["password"] != "pw" || e["obfs"] != "salamander" || e["name"] != "h" {
+		t.Fatalf("entry: %v", e)
 	}
 }

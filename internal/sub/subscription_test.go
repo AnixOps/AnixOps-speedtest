@@ -101,3 +101,37 @@ func TestDecodeBase64Variants(t *testing.T) {
 		}
 	}
 }
+
+func TestParseHysteria2(t *testing.T) {
+	n, err := parseLine("hysteria2://s3cret@h.example.com:8443?sni=h.example.com&insecure=1&obfs=salamander&obfs-password=op&alpn=h3#HY2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n.Protocol != "hysteria2" || n.Password != "s3cret" || n.Port != "8443" || n.Name != "HY2" || n.SNI != "h.example.com" {
+		t.Fatalf("unexpected %+v", n)
+	}
+	if n.Extra["skip-cert-verify"] != true || n.Extra["obfs"] != "salamander" || n.Extra["obfs-password"] != "op" {
+		t.Fatalf("extra: %+v", n.Extra)
+	}
+	if n2, err := parseLine("hy2://pw@h.example.com#x"); err != nil || n2.Port != "443" {
+		t.Fatalf("default port: %+v %v", n2, err)
+	}
+}
+
+func TestParseTUIC(t *testing.T) {
+	n, err := parseLine("tuic://11111111-2222:pw@t.example.com:443?congestion_control=bbr&udp_relay_mode=native&alpn=h3&sni=t.example.com#TUIC")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n.Protocol != "tuic" || n.UUID != "11111111-2222" || n.Password != "pw" || n.Extra["congestion-controller"] != "bbr" || n.Extra["udp-relay-mode"] != "native" {
+		t.Fatalf("unexpected %+v", n)
+	}
+}
+
+func TestClashYAMLKeepsExtrasForNativeProtocols(t *testing.T) {
+	y := "proxies:\n  - {name: h, type: hysteria2, server: h.com, port: 443, password: pw, obfs: salamander, up: 50 Mbps}\n"
+	nodes := parseClashYAML(y)
+	if len(nodes) != 1 || nodes[0].Extra["obfs"] != "salamander" || nodes[0].Extra["up"] != "50 Mbps" {
+		t.Fatalf("unexpected %+v", nodes)
+	}
+}

@@ -154,6 +154,23 @@ func buildConfig(proxy clash.Proxy, socksPort, httpPort, mixedPort int) ([]byte,
 	case "shadowsocks", "ss":
 		entry["password"] = proxy.Password
 		entry["cipher"] = proxy.Cipher
+	default:
+		// hysteria2, tuic, wireguard, ssr, ...: mihomo understands them natively,
+		// so forward credentials and every extra option untouched.
+		if proxy.UUID != "" {
+			entry["uuid"] = proxy.UUID
+		}
+		if proxy.Password != "" {
+			entry["password"] = proxy.Password
+		}
+		if proxy.Cipher != "" {
+			entry["cipher"] = proxy.Cipher
+		}
+		for k, v := range proxy.Extra {
+			if _, exists := entry[k]; !exists {
+				entry[k] = v
+			}
+		}
 	}
 
 	if proxy.Network != "" {
