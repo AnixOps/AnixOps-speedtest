@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -74,6 +75,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		promJob         string
 		repeat          int
 		redact          bool
+		speedTimeout    time.Duration
+		unlockTimeout   time.Duration
+		jsonlPath       string
+		quiet           bool
 	)
 
 	fs.StringVar(&configFile, "f", "", "path to Clash YAML config file")
@@ -105,6 +110,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	fs.IntVar(&repeat, "repeat", 1, "latency samples per node; >1 reports median, jitter and loss")
 	fs.BoolVar(&redact, "redact", false, "mask server/exit/entry IPs and drop raw evidence so the report is safe to share")
+
+	fs.DurationVar(&speedTimeout, "speed-timeout", 0, "download-test timeout (default: 3x -timeout)")
+	fs.DurationVar(&unlockTimeout, "unlock-timeout", 0, "per-service unlock-check timeout (default: -timeout)")
+	fs.StringVar(&jsonlPath, "jsonl", "", "stream each node's result as a JSON line to this file as it completes (- for stdout)")
+	fs.BoolVar(&quiet, "q", false, "suppress progress logging")
 
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -173,7 +183,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	logger := log.New(stderr, "", log.LstdFlags)
+	logOut := stderr
+	if quiet {
+		logOut = io.Discard
+	}
+	logger := log.New(logOut, "", log.LstdFlags)
 	logger.Printf("loaded %d proxies from %s", len(proxies), source)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -203,18 +217,40 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	cfg := probe.Config{
-		Kernel:       kernelMode,
-		Timeout:      timeout,
-		DownloadSize: downloadSize,
-		SkipLatency:  skipLatency,
-		SkipSpeed:    skipSpeed,
-		SkipUnlock:   skipUnlock,
-		SkipTopo:     skipTopo,
-		SkipIPRisk:   skipIPRisk,
-		SkipDNS:      skipDNS,
-		SkipSSH:      skipSSH,
-		BinDir:       binDir,
-		Repeat:       repeat,
+		Kernel:        kernelMode,
+		Timeout:       timeout,
+		DownloadSize:  downloadSize,
+		SkipLatency:   skipLatency,
+		SkipSpeed:     skipSpeed,
+		SkipUnlock:    skipUnlock,
+		SkipTopo:      skipTopo,
+		SkipIPRisk:    skipIPRisk,
+		SkipDNS:       skipDNS,
+		SkipSSH:       skipSSH,
+		BinDir:        binDir,
+		Repeat:        repeat,
+		SpeedTimeout:  speedTimeout,
+		UnlockTimeout: unlockTimeout,
+	}
+	if jsonlPath != "" {
+		var jw io.Writer = stdout
+		if jsonlPath != "-" {
+			f, err := os.Create(jsonlPath)
+			if err != nil {
+				fmt.Fprintf(stderr, "failed to create jsonl file: %v\n", err)
+				return 1
+			}
+			defer f.Close()
+			jw = f
+		}
+		enc := json.NewEncoder(jw)
+		enc.SetEscapeHTML(false)
+		cfg.OnResult = func(r probe.NodeResult) {
+			if redact {
+				r = probe.Redact([]probe.NodeResult{r})[0]
+			}
+			_ = enc.Encode(r)
+		}
 	}
 
 	results := probe.RunAll(ctx, proxies, cfg, concurrency, logger)

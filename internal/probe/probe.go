@@ -46,6 +46,13 @@ type Config struct {
 	BinDir       string
 	// Repeat is how many latency samples to take per node (<=1 means one).
 	Repeat int
+	// SpeedTimeout / UnlockTimeout override Timeout for those phases (0 = default:
+	// 3x Timeout for the download, Timeout for unlock checks).
+	SpeedTimeout  time.Duration
+	UnlockTimeout time.Duration
+	// OnResult, when set, receives each node's result as soon as it finishes.
+	// Calls are serialized.
+	OnResult func(NodeResult)
 }
 
 type NodeResult struct {
@@ -145,8 +152,13 @@ func evidenceHeaders(resp *http.Response) map[string]string {
 }
 
 func RunAll(ctx context.Context, proxies []clash.Proxy, cfg Config, concurrency int, logger *log.Logger) []NodeResult {
+	if concurrency < 1 {
+		concurrency = 1
+	}
 	results := make([]NodeResult, len(proxies))
 	var wg sync.WaitGroup
+	var mu sync.Mutex // guards done and OnResult
+	done := 0
 	sem := make(chan struct{}, concurrency)
 
 	for i, p := range proxies {
@@ -156,16 +168,44 @@ func RunAll(ctx context.Context, proxies []clash.Proxy, cfg Config, concurrency 
 		wg.Add(1)
 		go func(idx int, proxy clash.Proxy) {
 			defer wg.Done()
-			sem <- struct{}{}
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				results[idx] = NodeResult{Index: idx, Name: proxy.Name, Type: proxy.Type, Server: proxy.Server, Port: proxy.Port, Error: "cancelled"}
+				return
+			}
 			defer func() { <-sem }()
 
-			logger.Printf("[%d/%d] testing %s (%s)", idx+1, len(proxies), proxy.Name, proxy.Type)
-			results[idx] = testNode(ctx, idx, proxy, cfg, logger)
+			r := testNode(ctx, idx, proxy, cfg, logger)
+			results[idx] = r
+
+			mu.Lock()
+			done++
+			logger.Printf("[%d/%d] %s", done, len(proxies), summarize(r))
+			if cfg.OnResult != nil {
+				cfg.OnResult(r)
+			}
+			mu.Unlock()
 		}(i, p)
 	}
 
 	wg.Wait()
 	return results
+}
+
+// summarize renders a one-line outcome for progress logging.
+func summarize(r NodeResult) string {
+	if r.Error != "" {
+		return fmt.Sprintf("✗ %s (%s): %s", r.Name, r.Type, r.Error)
+	}
+	parts := []string{fmt.Sprintf("✓ %s (%s)", r.Name, r.Type)}
+	if r.Latency != nil && r.Latency.HTTPMs > 0 {
+		parts = append(parts, fmt.Sprintf("http=%.0fms", r.Latency.HTTPMs))
+	}
+	if r.Speed != nil && r.Speed.Mbps > 0 {
+		parts = append(parts, fmt.Sprintf("speed=%.1fMbps", r.Speed.Mbps))
+	}
+	return strings.Join(parts, " ")
 }
 
 func errStr(err error) string {
@@ -271,14 +311,22 @@ func testNode(ctx context.Context, idx int, p clash.Proxy, cfg Config, logger *l
 
 	// Speed
 	if !cfg.SkipSpeed {
-		speedResult, ev := measureSpeed(ctx, proxyURL, cfg.Timeout, cfg.DownloadSize)
+		speedTimeout := cfg.SpeedTimeout
+		if speedTimeout <= 0 {
+			speedTimeout = cfg.Timeout * 3
+		}
+		speedResult, ev := measureSpeed(ctx, proxyURL, speedTimeout, cfg.DownloadSize)
 		result.Speed = &speedResult
 		allEvidence = append(allEvidence, ev...)
 	}
 
 	// Streaming unlocks
 	if !cfg.SkipUnlock {
-		unlocks, ev := runUnlockChecks(ctx, proxyURL, cfg.Timeout)
+		unlockTimeout := cfg.UnlockTimeout
+		if unlockTimeout <= 0 {
+			unlockTimeout = cfg.Timeout
+		}
+		unlocks, ev := runUnlockChecks(ctx, proxyURL, unlockTimeout)
 		result.Unlocks = unlocks
 		allEvidence = append(allEvidence, ev...)
 	}
@@ -314,6 +362,8 @@ func testNode(ctx context.Context, idx int, p clash.Proxy, cfg Config, logger *l
 	return result
 }
 
+var binaryOnce sync.Once
+
 func startProxyForNode(ctx context.Context, p clash.Proxy, cfg Config, logger *log.Logger) (string, func() error, error) {
 	var binaryPath string
 	var err error
@@ -324,7 +374,7 @@ func startProxyForNode(ctx context.Context, p clash.Proxy, cfg Config, logger *l
 		if err != nil {
 			return "", nil, err
 		}
-		logger.Printf("using mihomo binary: %s", binaryPath)
+		binaryOnce.Do(func() { logger.Printf("using mihomo binary: %s", binaryPath) })
 		return mihomo.Start(ctx, binaryPath, p, "", 8*time.Second)
 	default:
 		binaryPath, err = xray.EnsureBinary(ctx, cfg.BinDir, 60*time.Second)
@@ -335,7 +385,7 @@ func startProxyForNode(ctx context.Context, p clash.Proxy, cfg Config, logger *l
 		if err != nil {
 			return "", nil, err
 		}
-		logger.Printf("using xray binary: %s", binaryPath)
+		binaryOnce.Do(func() { logger.Printf("using xray binary: %s", binaryPath) })
 		return xray.Start(ctx, binaryPath, nodeCfg, "", 8*time.Second)
 	}
 }
@@ -451,7 +501,7 @@ func measureLatency(ctx context.Context, proxyURL string, timeout time.Duration)
 }
 
 func measureSpeed(ctx context.Context, proxyURL string, timeout time.Duration, downloadBytes int64) (SpeedResult, []Evidence) {
-	client, err := proxy.NewHTTPClient(proxyURL, timeout*3)
+	client, err := proxy.NewHTTPClient(proxyURL, timeout)
 	if err != nil {
 		return SpeedResult{}, []Evidence{{Test: "speed", RawError: err.Error()}}
 	}
