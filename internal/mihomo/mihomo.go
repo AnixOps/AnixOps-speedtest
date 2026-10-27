@@ -83,7 +83,8 @@ func Start(ctx context.Context, binaryPath string, proxy clash.Proxy, workDir st
 	execPath := kernel.ExecPath(binaryPath)
 	cmd := exec.CommandContext(ctx, execPath, "-d", tmpDir, "-f", configPath)
 	cmd.Stdout = nil
-	cmd.Stderr = nil
+	stderrTail := &kernel.TailBuffer{Max: 2048}
+	cmd.Stderr = stderrTail
 	if err := cmd.Start(); err != nil {
 		os.RemoveAll(tmpDir)
 		return "", nil, fmt.Errorf("failed to start mihomo: %w", err)
@@ -95,7 +96,7 @@ func Start(ctx context.Context, binaryPath string, proxy clash.Proxy, workDir st
 		cmd.Process.Kill()
 		cmd.Wait()
 		os.RemoveAll(tmpDir)
-		return "", nil, fmt.Errorf("waiting for mihomo listener: %w", err)
+		return "", nil, fmt.Errorf("waiting for mihomo listener: %w%s", err, stderrTail.Suffix())
 	}
 
 	stop := kernel.NewStopper(cmd, tmpDir)
@@ -130,10 +131,22 @@ type dnsConfig struct {
 	Nameserver []string `yaml:"nameserver"`
 }
 
+// mihomoType maps this tool's normalized type names back to mihomo's. mihomo
+// rejects "shadowsocks" ("unsupport proxy type") and only accepts "ss".
+func mihomoType(t string) string {
+	switch strings.ToLower(t) {
+	case "shadowsocks":
+		return "ss"
+	case "shadowsocksr":
+		return "ssr"
+	}
+	return t
+}
+
 func buildConfig(proxy clash.Proxy, socksPort, httpPort, mixedPort int) ([]byte, error) {
 	entry := make(proxyEntry)
 	entry["name"] = proxy.Name
-	entry["type"] = proxy.Type
+	entry["type"] = mihomoType(proxy.Type)
 	entry["server"] = proxy.Server
 	entry["port"] = proxy.Port
 
@@ -208,10 +221,12 @@ func buildConfig(proxy clash.Proxy, socksPort, httpPort, mixedPort int) ([]byte,
 		Port:      httpPort,
 		MixedPort: mixedPort,
 		AllowLan:  false,
-		Mode:      "direct",
-		LogLevel:  "silent",
-		Ipv6:      false,
-		Proxies:   []proxyEntry{entry},
+		// "rule" + MATCH sends everything to the node under test. Do NOT use "direct":
+		// it bypasses every proxy and silently measures the local network instead.
+		Mode:     "rule",
+		LogLevel: "silent",
+		Ipv6:     false,
+		Proxies:  []proxyEntry{entry},
 		ProxyGroups: []proxyGroup{
 			{
 				Name:    "PROXY",
@@ -220,7 +235,7 @@ func buildConfig(proxy clash.Proxy, socksPort, httpPort, mixedPort int) ([]byte,
 			},
 		},
 		Rules: []string{
-			"Match,PROXY",
+			"MATCH,PROXY",
 		},
 		Dns: &dnsConfig{
 			Enable:     true,

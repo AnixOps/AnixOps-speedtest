@@ -84,3 +84,32 @@ func NewStopper(cmd *exec.Cmd, cleanupDir string) func() error {
 		return result
 	}
 }
+
+// TailBuffer is an io.Writer that keeps only the last Max bytes written, used to
+// attach a kernel's final log lines to a startup error without unbounded memory.
+type TailBuffer struct {
+	Max int
+	mu  sync.Mutex
+	buf []byte
+}
+
+func (t *TailBuffer) Write(p []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.buf = append(t.buf, p...)
+	if t.Max > 0 && len(t.buf) > t.Max {
+		t.buf = t.buf[len(t.buf)-t.Max:]
+	}
+	return len(p), nil
+}
+
+// Suffix formats the captured output for appending to an error ("" when empty).
+func (t *TailBuffer) Suffix() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	s := strings.TrimSpace(string(t.buf))
+	if s == "" {
+		return ""
+	}
+	return "\n  kernel output: " + strings.ReplaceAll(s, "\n", "\n    ")
+}

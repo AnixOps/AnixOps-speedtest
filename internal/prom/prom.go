@@ -42,7 +42,7 @@ func PushMetrics(endpointURL, job string, results []probe.NodeResult, accessID, 
 
 		buf.WriteString(fmt.Sprintf("speedtest_test_timestamp%s %.0f\n", labels, now))
 
-		if r.Error != "" {
+		if !r.Up() {
 			buf.WriteString(fmt.Sprintf("speedtest_node_up%s 0\n", labels))
 			continue
 		}

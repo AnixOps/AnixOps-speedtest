@@ -47,3 +47,40 @@ func TestBuildConfigForwardsExtraOptions(t *testing.T) {
 		t.Fatalf("entry: %v", e)
 	}
 }
+
+func TestBuildConfigRoutesThroughProxy(t *testing.T) {
+	out, err := buildConfig(clash.Proxy{Name: "n", Type: "ss", Server: "s", Port: 1, Cipher: "aes-256-gcm", Password: "p"}, 1, 2, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		Mode  string   `yaml:"mode"`
+		Rules []string `yaml:"rules"`
+	}
+	if err := yaml.Unmarshal(out, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	// Regression: mode "direct" bypassed the proxy and measured the local network.
+	if cfg.Mode != "rule" || len(cfg.Rules) != 1 || cfg.Rules[0] != "MATCH,PROXY" {
+		t.Fatalf("traffic would not be routed through the node: mode=%q rules=%v", cfg.Mode, cfg.Rules)
+	}
+}
+
+func TestBuildConfigShadowsocksTypeName(t *testing.T) {
+	// Regression: mihomo fails to start with type "shadowsocks"; it requires "ss".
+	for _, typ := range []string{"shadowsocks", "ss"} {
+		out, err := buildConfig(clash.Proxy{Name: "n", Type: typ, Server: "s", Port: 1, Cipher: "aes-256-gcm", Password: "p"}, 1, 2, 3)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var cfg struct {
+			Proxies []map[string]any `yaml:"proxies"`
+		}
+		if err := yaml.Unmarshal(out, &cfg); err != nil {
+			t.Fatal(err)
+		}
+		if got := cfg.Proxies[0]["type"]; got != "ss" {
+			t.Errorf("%s: emitted type %v, want ss", typ, got)
+		}
+	}
+}

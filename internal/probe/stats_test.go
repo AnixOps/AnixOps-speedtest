@@ -36,3 +36,22 @@ func TestMbpsFromBytes(t *testing.T) {
 		t.Error("zero bytes")
 	}
 }
+
+func TestNodeUp(t *testing.T) {
+	cases := []struct {
+		name string
+		r    NodeResult
+		want bool
+	}{
+		{"error", NodeResult{Error: "x"}, false},
+		{"no latency test", NodeResult{}, true},
+		{"both probes failed", NodeResult{Latency: &LatencyResult{}}, false},
+		{"tcp only", NodeResult{Latency: &LatencyResult{TCPMs: 12}}, true},
+		{"http only", NodeResult{Latency: &LatencyResult{HTTPMs: 12}}, true},
+	}
+	for _, c := range cases {
+		if got := c.r.Up(); got != c.want {
+			t.Errorf("%s: got %v", c.name, got)
+		}
+	}
+}

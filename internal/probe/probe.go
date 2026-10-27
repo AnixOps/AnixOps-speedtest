@@ -3,6 +3,7 @@ package probe
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/csv"
@@ -210,6 +211,15 @@ func summarize(r NodeResult) string {
 	return strings.Join(parts, " ")
 }
 
+// Up reports whether the node answered: no error, and, if latency was measured,
+// at least one probe succeeded.
+func (r NodeResult) Up() bool {
+	if r.Error != "" {
+		return false
+	}
+	return r.Latency == nil || r.Latency.HTTPMs > 0 || r.Latency.TCPMs > 0
+}
+
 func errStr(err error) string {
 	if err == nil {
 		return ""
@@ -309,6 +319,14 @@ func testNode(ctx context.Context, idx int, p clash.Proxy, cfg Config, logger *l
 		latResult, ev := measureLatencyRepeated(ctx, proxyURL, cfg.Timeout, cfg.Repeat)
 		result.Latency = &latResult
 		allEvidence = append(allEvidence, ev...)
+
+		// A node that answers neither probe is dead; running the remaining checks
+		// would only burn a timeout per check.
+		if latResult.HTTPMs <= 0 && latResult.TCPMs <= 0 {
+			result.Error = "node unreachable: all latency probes failed"
+			result.Evidence = allEvidence
+			return result
+		}
 	}
 
 	// Speed
@@ -446,21 +464,23 @@ func measureLatency(ctx context.Context, proxyURL string, timeout time.Duration)
 	var evidence []Evidence
 	result := LatencyResult{}
 
-	// TCP latency
+	// TCP latency. A SOCKS5 CONNECT is acknowledged by the local kernel before the
+	// upstream connection exists, so a bare dial "succeeds" even for dead nodes.
+	// Completing a TLS handshake with the target forces a real round trip through
+	// the node, so TCPMs means connect + one handshake RTT.
 	target := "1.1.1.1:443"
 	started := time.Now()
-	conn, err := proxy.DialTCP(ctx, proxyURL, target, timeout)
+	tcpErr := tlsRoundTrip(ctx, proxyURL, target, "one.one.one.one", timeout)
 	elapsed := time.Since(started)
-	if err == nil {
-		conn.Close()
+	if tcpErr == nil {
 		result.TCPMs = float64(elapsed) / float64(time.Millisecond)
 	}
 	evidence = append(evidence, Evidence{
 		Test:     "latency_tcp",
 		URL:      target,
-		Method:   "TCP",
+		Method:   "TCP+TLS",
 		Timing:   map[string]float64{"total": float64(elapsed) / float64(time.Millisecond)},
-		RawError: errStr(err),
+		RawError: errStr(tcpErr),
 	})
 
 	// HTTP latency
@@ -500,6 +520,18 @@ func measureLatency(ctx context.Context, proxyURL string, timeout time.Duration)
 	}
 
 	return result, evidence
+}
+
+// tlsRoundTrip dials target through the proxy and completes a TLS handshake.
+func tlsRoundTrip(ctx context.Context, proxyURL, target, serverName string, timeout time.Duration) error {
+	conn, err := proxy.DialTCP(ctx, proxyURL, target, timeout)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	hctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return tls.Client(conn, &tls.Config{ServerName: serverName, MinVersion: tls.VersionTLS12}).HandshakeContext(hctx)
 }
 
 func measureSpeed(ctx context.Context, proxyURL string, timeout time.Duration, downloadBytes int64) (SpeedResult, []Evidence) {

@@ -59,3 +59,15 @@ func TestStopperKillsAndCleans(t *testing.T) {
 		t.Fatal("cleanup dir should be removed")
 	}
 }
+
+func TestTailBuffer(t *testing.T) {
+	tb := &TailBuffer{Max: 5}
+	tb.Write([]byte("hello "))
+	tb.Write([]byte("world"))
+	if got := tb.Suffix(); got != "\n  kernel output: world" {
+		t.Fatalf("got %q", got)
+	}
+	if (&TailBuffer{Max: 5}).Suffix() != "" {
+		t.Fatal("empty buffer must give empty suffix")
+	}
+}

@@ -135,6 +135,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 
+	switch strings.ToLower(outputFormat) {
+	case "table", "json", "csv", "chart", "png":
+	default:
+		fmt.Fprintf(stderr, "error: unsupported format %q (allowed: table, json, csv, chart, png)\n", outputFormat)
+		return 2
+	}
+
 	hasConfig := strings.TrimSpace(configFile) != ""
 	hasSub := strings.TrimSpace(subscriptionURL) != ""
 
@@ -340,7 +347,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	var w io.Writer = stdout
-	if outputFile == "" {
+	if outputFile == "" && strings.ToLower(outputFormat) != "table" {
 		// Default output file in output directory based on format
 		var baseName string
 		switch strings.ToLower(outputFormat) {
@@ -350,8 +357,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 			baseName = "report.csv"
 		case "chart":
 			baseName = "report.html"
-		default:
-			baseName = "report.txt"
 		}
 		outputFile = filepath.Join(outputDir, baseName)
 	}
