@@ -387,162 +387,6 @@ func extractWikipedia(resp *http.Response, body []byte) UnlockStatus {
 
 // --- IP Risk checker ---
 
-func CheckIPRisk(ctx context.Context, proxyURL string, timeout time.Duration) (IPRiskResult, []Evidence) {
-	var evidence []Evidence
-	client, err := proxy.NewHTTPClient(proxyURL, timeout)
-	if err != nil {
-		return IPRiskResult{RiskLevel: "error"}, evidence
-	}
-
-	// Try ipinfo.io first
-	result, ev1 := fetchIPInfo(client, ctx, timeout, "https://ipinfo.io/json", func(body []byte) IPRiskResult {
-		var data struct {
-			IP      string `json:"ip"`
-			City    string `json:"city"`
-			Region  string `json:"region"`
-			Country string `json:"country"`
-			Org     string `json:"org"`
-			Loc     string `json:"loc"`
-		}
-		if err := json.Unmarshal(body, &data); err != nil {
-			return IPRiskResult{}
-		}
-		r := IPRiskResult{
-			IP:      data.IP,
-			Country: data.Country,
-			ISP:     data.Org,
-		}
-		if data.Org != "" && (strings.Contains(strings.ToLower(data.Org), "hosting") ||
-			strings.Contains(strings.ToLower(data.Org), "datacenter") ||
-			strings.Contains(strings.ToLower(data.Org), "cloud")) {
-			r.RiskScore = 75
-			r.RiskLevel = "high"
-			r.ProxyType = "proxy/datacenter"
-		}
-		return r
-	})
-	if ev1.Test != "" {
-		evidence = append(evidence, ev1)
-	}
-	if result.IP != "" {
-		// Cross-check with ip-api.com for proxy/hosting detection
-		url2 := fmt.Sprintf("http://ip-api.com/json/%s?fields=status,country,isp,proxy,hosting", result.IP)
-		req2, err := http.NewRequestWithContext(ctx, http.MethodGet, url2, nil)
-		started2 := time.Now()
-		if err == nil {
-			resp2, err2 := client.Do(req2)
-			elapsed2 := time.Since(started2)
-			if err2 == nil {
-				defer resp2.Body.Close()
-				body2, _ := io.ReadAll(io.LimitReader(resp2.Body, 64*1024))
-				var ipData struct {
-					Status  string `json:"status"`
-					Country string `json:"country"`
-					ISP     string `json:"isp"`
-					Proxy   bool   `json:"proxy"`
-					Hosting bool   `json:"hosting"`
-				}
-				if json.Unmarshal(body2, &ipData) == nil && ipData.Status == "success" {
-					if ipData.Proxy || ipData.Hosting {
-						result.RiskScore = 75
-						result.RiskLevel = "high"
-						result.ProxyType = "proxy/datacenter"
-					} else if result.RiskLevel == "" {
-						result.RiskScore = 15
-						result.RiskLevel = "low"
-					}
-					if result.Country == "" {
-						result.Country = ipData.Country
-					}
-					if result.ISP == "" {
-						result.ISP = ipData.ISP
-					}
-				}
-				evidence = append(evidence, Evidence{
-					Test:       "ip_risk_check",
-					URL:        url2,
-					Method:     "GET",
-					StatusCode: resp2.StatusCode,
-					Body:       truncateBody(string(body2), 1024),
-					Timing:     map[string]float64{"total": float64(elapsed2) / float64(time.Millisecond)},
-				})
-			}
-		}
-		if result.RiskLevel == "" {
-			result.RiskScore = 30
-			result.RiskLevel = "medium"
-		}
-		return result, evidence
-	}
-
-	// Fallback: ip-api.com direct lookup
-	result2, ev2 := fetchIPRiskWithEvidence(client, ctx, timeout, "http://ip-api.com/json/?fields=status,country,isp,proxy,hosting")
-	if ev2.Test != "" {
-		evidence = append(evidence, ev2)
-	}
-	if result2.RiskLevel != "" {
-		result = result2
-	}
-
-	if result.RiskLevel == "" {
-		result.RiskScore = 50
-		result.RiskLevel = "medium"
-	}
-	return result, evidence
-}
-
-func fetchIPRiskWithEvidence(client *http.Client, ctx context.Context, timeout time.Duration, url string) (IPRiskResult, Evidence) {
-	started := time.Now()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return IPRiskResult{}, Evidence{Test: "ip_risk", URL: url, Method: "GET", RawError: err.Error()}
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0")
-
-	resp, err := client.Do(req)
-	elapsed := time.Since(started)
-	if err != nil {
-		return IPRiskResult{}, Evidence{Test: "ip_risk", URL: url, Method: "GET", Timing: map[string]float64{"total": float64(elapsed) / float64(time.Millisecond)}, RawError: err.Error()}
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-	if resp.StatusCode != 200 {
-		return IPRiskResult{}, Evidence{Test: "ip_risk", URL: url, Method: "GET", StatusCode: resp.StatusCode, Body: truncateBody(string(body), 1024)}
-	}
-
-	var data struct {
-		Status  string `json:"status"`
-		Country string `json:"country"`
-		ISP     string `json:"isp"`
-		Proxy   bool   `json:"proxy"`
-		Hosting bool   `json:"hosting"`
-		IP      string `json:"query"`
-	}
-	if json.Unmarshal(body, &data) != nil || data.Status != "success" {
-		return IPRiskResult{}, Evidence{Test: "ip_risk", URL: url, Method: "GET", StatusCode: resp.StatusCode, Body: truncateBody(string(body), 512)}
-	}
-
-	r := IPRiskResult{Country: data.Country, ISP: data.ISP, IP: data.IP}
-	if data.Proxy || data.Hosting {
-		r.RiskScore = 75
-		r.RiskLevel = "high"
-		r.ProxyType = "proxy/datacenter"
-	} else {
-		r.RiskScore = 15
-		r.RiskLevel = "low"
-	}
-
-	return r, Evidence{
-		Test:       "ip_risk",
-		URL:        url,
-		Method:     "GET",
-		StatusCode: resp.StatusCode,
-		Body:       truncateBody(string(body), 1024),
-		Timing:     map[string]float64{"total": float64(elapsed) / float64(time.Millisecond)},
-	}
-}
-
 func fetchIPInfo(client *http.Client, ctx context.Context, timeout time.Duration, url string, parse func([]byte) IPRiskResult) (IPRiskResult, Evidence) {
 	started := time.Now()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -595,33 +439,13 @@ func CheckDNSRegion(ctx context.Context, proxyURL string, timeout time.Duration)
 	resp, err := client.Do(req)
 	elapsed := time.Since(started)
 	if err != nil {
-		// Fallback: ip-api.com
-		req2, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://ip-api.com/json/?fields=status,country,city,isp", nil)
-		if req2 == nil {
+		// Fallback: ipapi.is (HTTPS)
+		ip, f, ev, ok := ipapiIs.lookup(ctx, client, "")
+		evidence = append(evidence, ev)
+		if !ok {
 			return DNSRegionResult{}, evidence
 		}
-		req2.Header.Set("User-Agent", "Mozilla/5.0")
-		resp2, err2 := client.Do(req2)
-		if err2 != nil {
-			return DNSRegionResult{}, evidence
-		}
-		defer resp2.Body.Close()
-		body2, _ := io.ReadAll(io.LimitReader(resp2.Body, 64*1024))
-		var data2 struct {
-			Status  string `json:"status"`
-			Country string `json:"country"`
-			City    string `json:"city"`
-			ISP     string `json:"isp"`
-		}
-		if json.Unmarshal(body2, &data2) == nil && data2.Status == "success" {
-			return DNSRegionResult{
-				IP:      "",
-				Country: data2.Country,
-				City:    data2.City,
-				ISP:     data2.ISP,
-			}, evidence
-		}
-		return DNSRegionResult{}, evidence
+		return DNSRegionResult{IP: ip, Country: f.Country, ISP: f.ISP}, evidence
 	}
 	defer resp.Body.Close()
 
