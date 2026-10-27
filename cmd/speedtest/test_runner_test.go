@@ -209,7 +209,7 @@ func TestVerifyCommand(t *testing.T) {
 	if ret != 0 {
 		t.Fatalf("verify returned non-zero: %d\n%s", ret, output)
 	}
-	for _, check := range []string{"✓ SHA-256", "✓ Ed25519"} {
+	for _, check := range []string{"✓ hash", "✓ ed25519", "✓ ml-dsa-87"} {
 		if !strings.Contains(output, check) {
 			t.Errorf("verify output missing %q:\n%s", check, output)
 		}
@@ -241,7 +241,7 @@ func TestVerifyCommandTampered(t *testing.T) {
 	if ret == 0 {
 		t.Fatalf("tampered report should have failed verification\n%s", output)
 	}
-	if !strings.Contains(output, "✗ SHA-256 hash mismatch") {
+	if !strings.Contains(output, "✗ hash: SHA-256 mismatch") {
 		t.Errorf("expected hash mismatch message:\n%s", output)
 	}
 }

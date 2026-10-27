@@ -30,7 +30,9 @@ func LoadOrGenerateMLDSAKeyPair(keyDir string) (*mldsa87.PublicKey, *mldsa87.Pri
 			return nil, nil, fmt.Errorf("invalid ML-DSA private key: %w", err)
 		}
 		pub := priv.Public().(*mldsa87.PublicKey)
-		os.WriteFile(pubPath, pub.Bytes(), 0o644)
+		if err := os.WriteFile(pubPath, pub.Bytes(), 0o644); err != nil {
+			return nil, nil, fmt.Errorf("save public key: %w", err)
+		}
 		return pub, priv, nil
 	}
 
@@ -51,7 +53,10 @@ func LoadOrGenerateMLDSAKeyPair(keyDir string) (*mldsa87.PublicKey, *mldsa87.Pri
 
 // SignHashMLDSA signs a SHA-256 hash with ML-DSA-87. Returns hex-encoded signature.
 func SignHashMLDSA(hash []byte, priv *mldsa87.PrivateKey) string {
-	sig, _ := priv.Sign(nil, hash, nil)
+	sig, err := priv.Sign(nil, hash, nil)
+	if err != nil {
+		return ""
+	}
 	return hex.EncodeToString(sig)
 }
 

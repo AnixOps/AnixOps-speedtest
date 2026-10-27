@@ -1,165 +1,81 @@
 package main
 
 import (
-	"encoding/hex"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
 	"github.com/anixops/speedtest/internal/ats"
-	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
 )
 
 func runVerify(args []string, stdout, stderr io.Writer) int {
-	if len(args) == 0 {
-		fmt.Fprintln(stderr, "Usage: speedtest verify <report.json> [--key-fingerprint <hash>]")
+	fs := flag.NewFlagSet("verify", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var opts ats.VerifyOptions
+	fs.StringVar(&opts.TrustedKeyFingerprint, "key-fingerprint", "", "pin the Ed25519 signer (SHA-256 of the public key, hex)")
+	fs.StringVar(&opts.TrustedMLDSAFingerprint, "mldsa-fingerprint", "", "pin the ML-DSA-87 signer (SHA-256 of the public key, hex)")
+	fs.Usage = func() {
+		fmt.Fprintln(stderr, "Usage: speedtest verify [--key-fingerprint <hex>] [--mldsa-fingerprint <hex>] <report.json>")
+		fs.PrintDefaults()
+	}
+	// Accept the file before or after the flags.
+	var file string
+	rest := args
+	for len(rest) > 0 {
+		if err := fs.Parse(rest); err != nil {
+			return 2
+		}
+		if fs.NArg() == 0 {
+			break
+		}
+		if file == "" {
+			file = fs.Arg(0)
+		}
+		rest = fs.Args()[1:]
+	}
+	if file == "" {
+		fs.Usage()
 		return 2
 	}
 
-	filePath := args[0]
-	var trustedKey string
-	for i, a := range args[1:] {
-		if a == "--key-fingerprint" && i+2 < len(args) {
-			trustedKey = strings.ToLower(strings.TrimSpace(args[i+2]))
-			break
-		}
-	}
-
-	data, err := os.ReadFile(filePath)
+	data, err := os.ReadFile(file)
 	if err != nil {
 		fmt.Fprintf(stderr, "error reading file: %v\n", err)
 		return 2
 	}
-
-	// Try parsing as envelope with certificate
-	var envelope ats.ReportEnvelope
-	if err := json.Unmarshal(data, &envelope); err != nil {
+	var env ats.ReportEnvelope
+	if err := json.Unmarshal(data, &env); err != nil {
 		fmt.Fprintf(stderr, "error parsing JSON: %v\n", err)
 		return 2
 	}
 
-	// Compute canonical hash of results
-	hash, err := ats.ComputeCanonicalHash(envelope.Results)
-	if err != nil {
-		fmt.Fprintf(stderr, "error computing hash: %v\n", err)
-		return 2
+	res := ats.Verify(env, opts)
+	fmt.Fprintf(stdout, "File:             %s\n", file)
+	fmt.Fprintf(stdout, "Computed SHA-256: %s\n", res.ComputedHash)
+	fmt.Fprintf(stdout, "Anti-Tamper ID:   %s\n", ats.AntiTamperID(res.ComputedHash))
+	if c := env.Certificate; c != nil {
+		fmt.Fprintf(stdout, "Timestamp:        %s\n", c.Timestamp.Format("2006-01-02 15:04:05 UTC"))
+		fmt.Fprintf(stdout, "Blockchain:       %s\n", c.OTSStatus)
 	}
+	fmt.Fprintln(stdout)
 
-	fmt.Fprintf(stdout, "File: %s\n", filePath)
-	fmt.Fprintf(stdout, "Computed SHA-256: %s\n", hash)
-	fmt.Fprintf(stdout, "Anti-Tamper ID:   %s\n", ats.AntiTamperID(hash))
-	fmt.Fprintln(stdout, "")
+	for i, c := range res.Checks {
+		mark := map[ats.Status]string{ats.StatusPass: "✓", ats.StatusFail: "✗", ats.StatusSkip: "—"}[c.Status]
+		fmt.Fprintf(stdout, "[%d] %s %s: %s\n", i+1, mark, c.Name, c.Detail)
+	}
+	fmt.Fprintln(stdout)
 
-	if envelope.Certificate == nil {
-		fmt.Fprintln(stdout, "No certificate found in this file.")
-		fmt.Fprintln(stdout, "The data cannot be verified without a certificate.")
+	switch {
+	case !res.OK():
+		fmt.Fprintln(stdout, "✗ FAILED: verification failed.")
 		return 1
-	}
-
-	cert := envelope.Certificate
-	fmt.Fprintf(stdout, "Certificate SHA-256: %s\n", cert.Hash)
-	fmt.Fprintf(stdout, "Certificate ATS ID:    %s\n", cert.AntiTamperID)
-	fmt.Fprintf(stdout, "Timestamp:             %s\n", cert.Timestamp.Format("2006-01-02 15:04:05 UTC"))
-	fmt.Fprintf(stdout, "Blockchain Status:     %s\n", cert.OTSStatus)
-	if cert.PublicKeyHash != "" {
-		fmt.Fprintf(stdout, "Public Key Hash:     %s\n", cert.PublicKeyHash)
-	}
-	if cert.PublicKeyOTSS != "" {
-		fmt.Fprintf(stdout, "Key OTS Status:      %s\n", cert.PublicKeyOTSS)
-	}
-	if trustedKey != "" {
-		fmt.Fprintf(stdout, "Trusted Key:         %s\n", trustedKey)
-	}
-	fmt.Fprintln(stdout, "")
-
-	allOK := true
-	checkNum := 0
-
-	// Trust anchor check (B)
-	if trustedKey != "" && cert.PublicKeyHash != "" {
-		checkNum++
-		if strings.ToLower(cert.PublicKeyHash) == trustedKey {
-			fmt.Fprintf(stdout, "[%d] ✓ Trust anchor: Report signed by the expected key.\n", checkNum)
-		} else {
-			fmt.Fprintf(stdout, "[%d] ✗ Trust anchor FAILED: NOT signed by the trusted key.\n", checkNum)
-			fmt.Fprintf(stdout, "    Expected: %s\n", trustedKey)
-			fmt.Fprintf(stdout, "    Got:      %s\n", cert.PublicKeyHash)
-			allOK = false
-		}
-	}
-
-	// Hash verification
-	checkNum++
-	if hash == cert.Hash {
-		fmt.Fprintf(stdout, "[%d] ✓ SHA-256 hash: Data integrity confirmed.\n", checkNum)
-		if cert.OTSProof != "" {
-			fmt.Fprintln(stdout, "    Anchored to Bitcoin blockchain via OpenTimestamps.")
-			fmt.Fprintln(stdout, "    Verify at: https://verify.opentimestamps.org/")
-		}
-	} else {
-		fmt.Fprintf(stdout, "[%d] ✗ SHA-256 hash mismatch. Data may have been tampered with.\n", checkNum)
-		allOK = false
-	}
-
-	// Key blockchain anchoring (D)
-	if cert.PublicKeyOTSS == "confirmed" {
-		checkNum++
-		fmt.Fprintf(stdout, "[%d] ✓ Key anchored: Public key fingerprint timestamped via OpenTimestamps.\n", checkNum)
-	} else if cert.PublicKeyOTSS == "pending" {
-		checkNum++
-		fmt.Fprintf(stdout, "[%d] ~ Key anchoring pending: Will be available later.\n", checkNum)
-	}
-
-	// Ed25519 signature
-	checkNum++
-	if cert.PublicKey != "" && cert.Signature != "" {
-		hashBytes, _ := hex.DecodeString(cert.Hash)
-		if err := ats.VerifyHash(hashBytes, cert.Signature, cert.PublicKey); err != nil {
-			fmt.Fprintf(stdout, "[%d] ✗ Ed25519 signature: %v\n", checkNum, err)
-			allOK = false
-		} else {
-			fmt.Fprintf(stdout, "[%d] ✓ Ed25519 signature: Report signed by trusted key.\n", checkNum)
-		}
-	} else {
-		fmt.Fprintf(stdout, "[%d] — No Ed25519 signature\n", checkNum)
-	}
-
-	// ML-DSA-87 signature
-	checkNum++
-	if cert.MLDSAPublicKey != "" && cert.MLDSASignature != "" {
-		hashBytes, _ := hex.DecodeString(cert.Hash)
-		pubBytes, _ := hex.DecodeString(cert.MLDSAPublicKey)
-		if err := ats.VerifyHashMLDSA(hashBytes, cert.MLDSASignature, pubBytes); err != nil {
-			fmt.Fprintf(stdout, "[%d] ✗ ML-DSA-87 signature: %v\n", checkNum, err)
-			allOK = false
-		} else {
-			fmt.Fprintf(stdout, "[%d] ✓ ML-DSA-87 signature: Post-quantum signature valid.\n", checkNum)
-			fmt.Fprintf(stdout, "    PQC Key Hash: %s\n", mlDSAHashFromHex(cert.MLDSAPublicKey))
-		}
-	} else {
-		fmt.Fprintf(stdout, "[%d] — No ML-DSA-87 signature\n", checkNum)
-	}
-
-	fmt.Fprintln(stdout, "")
-	if allOK {
-		fmt.Fprintln(stdout, "✓ VERIFIED: All checks passed (classical + post-quantum + trust anchor).")
+	case !res.Signed():
+		fmt.Fprintln(stdout, "~ INTEGRITY ONLY: the hash matches but no signature was verified; this does not prove who produced the report.")
+		return 0
+	default:
+		fmt.Fprintln(stdout, "✓ VERIFIED: all checks passed.")
 		return 0
 	}
-
-	fmt.Fprintln(stdout, "✗ FAILED: Verification failed.")
-	return 1
-}
-
-func mlDSAHashFromHex(hexStr string) string {
-	pubBytes, err := hex.DecodeString(hexStr)
-	if err != nil || len(pubBytes) != mldsa87.PublicKeySize {
-		return hexStr[:16] + "..."
-	}
-	pub := &mldsa87.PublicKey{}
-	if err := pub.UnmarshalBinary(pubBytes); err != nil {
-		return hexStr[:16] + "..."
-	}
-	return ats.MLDSAHash(pub)
 }

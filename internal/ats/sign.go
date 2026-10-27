@@ -39,10 +39,15 @@ func LoadOrGenerateKeyPair(keyDir string) (ed25519.PublicKey, ed25519.PrivateKey
 		if err != nil {
 			return nil, nil, fmt.Errorf("parse private key: %w", err)
 		}
-		priv := key.(ed25519.PrivateKey)
+		priv, ok := key.(ed25519.PrivateKey)
+		if !ok {
+			return nil, nil, fmt.Errorf("private key is %T, want Ed25519", key)
+		}
 		pub := priv.Public().(ed25519.PublicKey)
 		// Ensure public key file exists too
-		os.WriteFile(pubPath, []byte(hex.EncodeToString(pub)), 0o644)
+		if err := os.WriteFile(pubPath, []byte(hex.EncodeToString(pub)), 0o644); err != nil {
+			return nil, nil, fmt.Errorf("save public key: %w", err)
+		}
 		return pub, priv, nil
 	}
 
