@@ -221,35 +221,39 @@ func CheckIPRisk(ctx context.Context, proxyURL string, timeout time.Duration) (I
 		return IPRiskResult{RiskLevel: "error"}, evidence
 	}
 
+	// Step 1: discover the exit IP (cheap, HTTPS).
+	base, ev := fetchIPInfo(client, ctx, timeout, "https://ipinfo.io/json", parseIPInfoOrg)
+	if ev.Test != "" {
+		evidence = append(evidence, ev)
+	}
+
+	// Step 2: reputation lookup, de-duplicated per exit IP.
+	if base.IP != "" {
+		if cached, hit := cacheGet(base.IP); hit {
+			return cached, evidence
+		}
+	}
 	providers := []riskProvider{ipapiIs}
 	if os.Getenv(AllowPlainHTTPGeoIPEnv) == "1" {
 		providers = append(providers, ipAPICom)
 	}
-
 	for _, p := range providers {
-		ip, flags, ev, ok := p.lookup(ctx, client, "")
-		evidence = append(evidence, ev)
+		ip, flags, pev, ok := p.lookup(ctx, client, base.IP)
+		evidence = append(evidence, pev)
 		if !ok {
 			continue
-		}
-		if cached, hit := cacheGet(ip); hit {
-			return cached, evidence
 		}
 		res := flags.result(ip)
 		cachePut(ip, res)
 		return res, evidence
 	}
 
-	// No reputation provider answered: fall back to ipinfo.io for the IP and
-	// a coarse hosting-keyword heuristic, and say so via the "medium" level.
-	res, ev := fetchIPInfo(client, ctx, timeout, "https://ipinfo.io/json", parseIPInfoOrg)
-	if ev.Test != "" {
-		evidence = append(evidence, ev)
+	// No reputation provider answered: keep ipinfo's coarse hosting-keyword
+	// heuristic, and report "medium" when even that found nothing.
+	if base.RiskLevel == "" {
+		base.RiskScore, base.RiskLevel = 30, "medium"
 	}
-	if res.RiskLevel == "" {
-		res.RiskScore, res.RiskLevel = 30, "medium"
-	}
-	return res, evidence
+	return base, evidence
 }
 
 func parseIPInfoOrg(body []byte) IPRiskResult {
