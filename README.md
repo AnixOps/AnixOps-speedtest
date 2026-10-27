@@ -1,224 +1,149 @@
 # AnixOps Speedtest
 
-Open-source CLI tool for batch testing proxy node quality from Mihomo/Clash configuration files. Helps you filter high-quality nodes with comprehensive testing.
+CLI for batch-testing proxy node quality from a Mihomo/Clash config or a subscription URL. It starts a
+local proxy kernel per node (or per batch), routes every probe through it, and reports latency, speed,
+service unlocks and exit-IP reputation — with signed, tamper-evident reports.
 
-> **Note**: Clash has been deprecated. This tool primarily targets [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo) as the default proxy kernel, with xray-core also supported as an alternative.
-
-## Features
-
-### Streaming Unlock Detection
-- Netflix (with region detection)
-- YouTube Premium
-- Disney+
-- Bilibili (CN region check)
-- OpenAI (ChatGPT)
-- Claude
-- Spotify
-- Tiktok
-- Wikipedia
-
-### Network Quality Tests
-- **HTTP Latency** - True HTTP request-response timing
-- **TCP Latency** - Raw TCP connection timing
-- **Download Speed** - Throughput measurement (Mbps)
-- **IP Risk/Fraud Score** - Detect datacenter/proxy IPs via ip-api
-- **DNS Region Detection** - Identify exit IP geolocation
-- **SSH Port 22 Check** - Detect port 22 blocking
-- **Topology Analysis** - Entry/exit IP comparison (origin vs proxy)
-
-### Output Formats
-- **table** - Terminal table (default)
-- **json** - Machine-readable JSON (with embedded certificate)
-- **csv** - Spreadsheet-compatible CSV
-- **chart** - Interactive HTML report with anti-tamper certificate
-- **png** - Image report with QR code
-
-### Anti-Tamper (防伪)
-Every report automatically generates a **Certificate of Authenticity**:
-- SHA-256 hash of canonical test results
-- Anti-tamper ID (12-char short hash)
-- Bitcoin blockchain anchoring via OpenTimestamps (free, no API key)
-- QR code in HTML/PNG reports for quick verification
-- Client-side auto-verification in HTML reports
+Default kernel: [mihomo](https://github.com/MetaCubeX/mihomo). [xray-core](https://github.com/XTLS/Xray-core) is supported for VMess/VLESS/Trojan/Shadowsocks.
 
 ## Install
 
-### Quick Install (Linux / macOS)
-
 ```bash
+# Linux / macOS — downloads the latest release and verifies its SHA-256 against checksums.txt
 curl -fsSL https://raw.githubusercontent.com/AnixOps/AnixOps-speedtest/master/scripts/install-speedtest.sh | bash
+# pin a version / custom dir:  VERSION=v1.2.3 INSTALL_DIR=$HOME/.local/bin bash install-speedtest.sh
 ```
-
-### Build from Source
 
 ```bash
-go build -o speedtest ./cmd/speedtest
+go build -o speedtest ./cmd/speedtest      # from source
+docker run --rm -v "$PWD:/work" ghcr.io/anixops/anixops-speedtest -f config.yaml -format json
 ```
 
-### Prerequisites
+Release checksums are signed with keyless [cosign](https://github.com/sigstore/cosign) (`checksums.txt.sigstore.json`) and an SBOM is attached.
 
-None. The program automatically downloads the required proxy kernel on first run from GitHub Releases:
-
-- **[mihomo](https://github.com/MetaCubeX/mihomo/releases)** - Default and recommended kernel
-- **[xray-core](https://github.com/XTLS/Xray-core/releases)** - Alternative kernel
-
-The downloaded binary is placed in the `bin/` directory and reused on subsequent runs. No manual setup required.
-
-## Project Structure
-
-```
-.
-├── bin/          # Downloaded proxy kernel binaries (auto-created)
-├── output/       # Generated reports (auto-created)
-│   └── verify.html  # Standalone web verification tool
-├── cmd/
-│   └── speedtest/
-│       ├── main.go
-│       └── verify.go   # CLI verification subcommand
-├── internal/     # Internal packages
-│   ├── ats/      # Anti-tamper: certificate, OTS, QR code
-│   ├── chart/    # HTML/PNG report generation
-│   ├── checker/  # Unlock & IP risk checkers
-│   ├── clash/    # Clash YAML parser
-│   ├── mihomo/   # Mihomo kernel launcher
-│   ├── probe/    # Core testing engine
-│   ├── proxy/    # SOCKS5/HTTP proxy dialer
-│   ├── sub/      # Subscription URL parser
-│   ├── topo/     # Topology analysis
-│   └── xray/     # Xray kernel launcher
-├── go.mod
-└── README.md
-```
+No manual kernel setup: on first run the kernel is downloaded from GitHub Releases into `bin/` and its
+**SHA-256 is verified** (GitHub release digest, or the `.dgst` file for Xray). A download without a published
+digest is refused unless you set `SPEEDTEST_ALLOW_UNVERIFIED_KERNEL=1`.
 
 ## Usage
 
 ```bash
-# Basic usage (defaults to mihomo kernel)
-speedtest -f config.yaml
-
-# Use xray kernel instead
-speedtest -f config.yaml -kernel xray
-
-# With HTML chart output (saved to output/report.html)
-speedtest -f config.yaml -format chart
-
-# Custom output file and directory
-speedtest -f config.yaml -format chart -output-dir reports -o my-report.html
-
-# Filter specific proxies by name
-speedtest -f config.yaml -filter "HK"
-
-# Skip certain tests for faster runs
-speedtest -f config.yaml -skip-speed -skip-ssh
-
-# JSON output
-speedtest -f config.yaml -format json
-
-# Adjust concurrency and timeout
-speedtest -f config.yaml -c 10 -timeout 15s
+speedtest -f config.yaml                         # table to stdout
+speedtest -sub "https://example/sub?token=..."   # v2ray/Clash subscription
+speedtest -f config.yaml -latency-only -repeat 5 # median / jitter / loss over 5 samples
+speedtest -f config.yaml -format json -redact    # shareable report: IPs masked, raw evidence dropped
+speedtest -f config.yaml -format chart           # HTML report -> output/report.html
+speedtest -f config.yaml -jsonl -                # stream one JSON line per node as it finishes
+speedtest -f big.yaml -mihomo-batch 20 -c 10     # 20 nodes per mihomo process
+speedtest verify output/report.json --key-fingerprint <sha256-of-signer-pubkey>
 ```
 
-## Command Line Options
+Progress is logged to stderr as nodes finish (`-q` silences it). Dead nodes (no latency probe answers) are
+reported immediately and skip the remaining checks.
+
+### Options
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-f` | (required) | Path to Mihomo/Clash YAML config file |
-| `-kernel` | `mihomo` | Proxy kernel: mihomo or xray |
-| `-format` | `table` | Output format: table, json, csv, chart, png |
-| `-o` | (auto) | Output file path (default: `outputDir/report.<format>`) |
-| `-output-dir` | `output` | Directory for output files |
-| `-bin-dir` | `bin` | Directory for downloaded kernel binaries |
-| `-c` | `5` | Concurrent test workers |
+| `-f` / `-sub` | – | Clash YAML file, or subscription URL (one is required) |
+| `-sub-ua` | `clash.meta` | User-Agent for the subscription fetch |
+| `-config` | `./speedtest.yaml` if present | YAML of option defaults, keyed by flag name; CLI flags win |
+| `-kernel` | `mihomo` | `mihomo` or `xray` |
+| `-format` | `table` | `table`, `json`, `csv`, `chart`, `png` (non-table default to `output/`) |
+| `-o`, `-output-dir`, `-bin-dir`, `-key-dir` | – / `output` / `bin` / `.keys` | Paths |
+| `-c` | `5` | Concurrent workers |
 | `-timeout` | `10s` | Per-probe timeout |
-| `-filter` | (none) | Only test proxies whose name contains this |
-| `-skip-latency` | false | Skip HTTP latency test |
-| `-skip-speed` | false | Skip download speed test |
-| `-skip-unlock` | false | Skip streaming unlock tests |
-| `-skip-topo` | false | Skip topology analysis |
-| `-skip-iprisk` | false | Skip IP risk check |
-| `-skip-dns` | false | Skip DNS region detection |
-| `-skip-ssh` | false | Skip SSH port 22 check |
-| `-download-size` | `10485760` | Bytes to download for speed test |
-| `-version` | false | Print version |
-| `-no-ats` | false | Disable blockchain anchoring |
+| `-speed-timeout`, `-unlock-timeout` | 3×`-timeout`, `-timeout` | Per-phase overrides |
+| `-repeat` | `1` | Latency samples per node; >1 reports median, jitter, loss |
+| `-filter` | – | Only test nodes whose name contains this |
+| `-latency-only` | false | Latency only (implies all `-skip-*` except latency) |
+| `-skip-latency/-speed/-unlock/-topo/-iprisk/-dns/-ssh` | false | Skip individual checks |
+| `-download-size` | `10485760` | Bytes for the speed test |
+| `-unlock-rules` | – | YAML that overrides/extends the built-in unlock rules |
+| `-mihomo-batch` | `0` | Nodes per mihomo process (0 = one process per node); falls back per node if a batch fails to start |
+| `-redact` | false | Mask server/entry/exit IPs, drop raw evidence (applied *before* signing) |
+| `-jsonl` | – | Stream per-node results as JSON lines to a file (`-` = stdout) |
+| `-no-ats`, `-no-sign` | false | Disable OpenTimestamps anchoring / signatures |
+| `-pushgateway`, `-prom-job` | – / `speedtest` | Push latency metrics to a Prometheus Pushgateway (skips file output) |
+| `-q`, `-version` | | Quiet; print version, commit and build date |
 
-## Chart Output
+A `speedtest.yaml` example:
 
-The `chart` format generates a self-contained HTML report with:
-- Summary statistics (nodes tested, avg latency, avg speed)
-- Horizontal bar charts for latency, speed, and IP risk
-- Streaming unlock coverage chart
-- Detailed results table with colored badges
-
-```bash
-speedtest -f config.yaml -format chart
-# Output: output/report.html — open in any browser
+```yaml
+kernel: mihomo
+c: 10
+timeout: 15s
+format: json
+repeat: 3
+skip-ssh: true
 ```
 
-## Anti-Tamper Verification (防伪验证)
+`.env` next to the binary may set `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` (Pushgateway behind Cloudflare Access); real environment variables take precedence.
 
-Every test run automatically generates a **Certificate of Authenticity** that prevents data tampering. The certificate includes a SHA-256 hash of all test results, anchored to the Bitcoin blockchain via [OpenTimestamps](https://opentimestamps.org).
+## What is measured
 
-### Verifying Reports
+- **HTTP latency** — GET `generate_204` through the node. **TCP latency** — connect **plus one TLS handshake round trip**
+  to 1.1.1.1:443 (a bare SOCKS5 connect is acknowledged locally and would "succeed" for dead nodes).
+- **Speed** — download of `-download-size` bytes (Cloudflare, Hetzner fallback).
+- **Unlocks** — Netflix, YouTube Premium, Disney+, Bilibili, OpenAI, Claude, Spotify, TikTok, Wikipedia. Each verdict carries a
+  `confidence` (`high|medium|low`). Rules live in [`internal/checker/rules.yaml`](internal/checker/rules.yaml) — edit or extend
+  them via `-unlock-rules` without recompiling.
+- **IP risk** — exit IP via ipinfo.io, reputation via proxycheck.io (HTTPS), ipapi.is as backup. Results are cached per exit IP.
+  The plain-HTTP ip-api.com provider is **off** unless `SPEEDTEST_ALLOW_HTTP_GEOIP=1` (its answers can be forged on the path).
+  If no reputation provider answers, the level is a coarse `medium` guess.
+- **DNS region**, **SSH port 22**, **topology** (entry vs exit IP).
 
-**CLI verification:**
-```bash
-speedtest verify output/report.json
-# Outputs: hash match/mismatch, certificate details, blockchain status
-```
+## Protocols
 
-**Web verification:**
-Open `output/verify.html` in a browser, then drag and drop any `report.json` file. The page computes SHA-256 locally and compares against the embedded certificate.
+| Kernel | Protocols |
+|--------|-----------|
+| mihomo | VMess, VLESS (incl. Reality), Trojan, Shadowsocks, **and everything mihomo supports natively** (Hysteria2, TUIC, … — options are forwarded verbatim from Clash YAML) |
+| xray | VMess, VLESS (incl. Reality), Trojan, Shadowsocks |
 
-**HTML report:**
-HTML reports include an auto-verifying section at the bottom — it opens with a green "Verified" banner if the data is intact, or red "Tampered" if modified.
+Share links parsed from subscriptions: `vmess://`, `vless://`, `trojan://`, `ss://`, `hysteria2://`/`hy2://`, `tuic://`.
+Note: nodes from subscriptions are tested with certificate verification **off**.
 
-**PNG report:**
-PNG reports include a QR code in the bottom-right corner that links to the OpenTimestamps verification page.
+## Reports and anti-tamper
 
-### Certificate Fields
+Every report carries a certificate: SHA-256 of the canonical results, an Ed25519 signature, an ML-DSA-87 (post-quantum)
+signature, and optional OpenTimestamps (Bitcoin) anchoring of the hash.
 
-| Field | Description |
-|-------|-------------|
-| `anti_tamper_id` | 12-char short hash (first 12 of SHA-256) |
-| `hash` | Full SHA-256 of canonical JSON results |
-| `timestamp` | UTC time when test completed |
-| `ots_status` | `confirmed` (anchored) / `pending` / `disabled` |
-| `ots_proof` | Base64-encoded OpenTimestamps proof file |
-
-### Disabling Anchoring
-
-Add `-no-ats` to disable blockchain anchoring. The certificate will still be generated with `ots_status: "disabled"`.
+`speedtest verify report.json` recomputes the hash and checks the signatures. **A signature only proves who signed if you
+know the signer's key**, so pin it:
 
 ```bash
-speedtest -f config.yaml -no-ats
+speedtest verify report.json --key-fingerprint <sha256 of Ed25519 public key> --mldsa-fingerprint <sha256 of ML-DSA public key>
 ```
 
-## How It Works
+The fingerprints are printed when a report is generated (`Trust Anchor (key fingerprint)`). Fingerprints are always recomputed
+from the embedded public key; a pinned key makes the matching signature mandatory. Without pins the result is reported as
+"integrity only"/"signer not pinned". The self-check embedded in HTML reports detects accidental corruption but cannot
+authenticate the author — use `verify` with a pinned key for that.
 
-1. Parses your Mihomo/Clash YAML config to extract proxy definitions
-2. For each proxy node, launches a local proxy kernel instance with SOCKS5 inbound
-3. Routes all test traffic through the proxy tunnel
-4. Collects metrics from streaming services, IP APIs, and download endpoints
-5. Outputs results in your chosen format
+`-redact` is applied before signing, so a redacted report verifies like any other.
 
-## Supported Proxy Types
+## Prometheus
 
-- VMess
-- VLESS
-- Trojan
-- Shadowsocks
+`-pushgateway URL` pushes `speedtest_node_up`, `speedtest_http_latency_ms`, `speedtest_tcp_latency_ms`, and (with `-repeat > 1`)
+`speedtest_http_jitter_ms`, `speedtest_http_loss_pct`. `scripts/speedtest-cron.sh` wraps this for cron (set `SUB_URL` or pass a config).
 
-## Kernel Comparison
+## Layout
 
-| Feature | mihomo | xray |
-|---------|--------|------|
-| Clash config support | Native | Converted |
-| Transport support | Full (all Clash protocols) | VMess/VLESS/Trojan/SS |
-| DNS resolution | Native DNS engine | System DNS |
-| Config format | YAML | JSON (auto-generated) |
-| Default | Yes | No |
+```
+cmd/speedtest      CLI, config file, verify subcommand
+internal/kernel    shared kernel download+SHA-256 verification, process supervision
+internal/mihomo    mihomo launcher (single node or batch)     internal/xray   xray launcher
+internal/probe     orchestration, latency/speed, redaction, table/CSV
+internal/checker   unlock rules engine, IP reputation, DNS, SSH
+internal/ats       certificate, signing (Ed25519 + ML-DSA), verification, OTS, QR
+internal/chart     HTML / PNG reports        internal/sub, internal/clash   input parsing
+internal/prom      Pushgateway               internal/topo                  entry/exit analysis
+```
 
-## License
+## Development
 
-MIT License
+```bash
+go vet ./... && go test -race ./...
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). MIT licensed.
