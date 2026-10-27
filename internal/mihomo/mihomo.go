@@ -93,7 +93,7 @@ func Start(ctx context.Context, binaryPath string, proxy clash.Proxy, workDir st
 	waitCtx, cancel := context.WithTimeout(ctx, startupTimeout)
 	defer cancel()
 	if err := proc.WaitReady(waitCtx, fmt.Sprintf("127.0.0.1:%d", mixedPort)); err != nil {
-		proc.Stop()
+		_ = proc.Stop()
 		return "", nil, fmt.Errorf("waiting for mihomo listener: %w%s", err, stderrTail.Suffix())
 	}
 	return fmt.Sprintf("socks5://127.0.0.1:%d", mixedPort), proc.Stop, nil
@@ -519,7 +519,7 @@ func StartBatch(ctx context.Context, binaryPath string, proxies []clash.Proxy, w
 	for i, port := range ports {
 		addr := fmt.Sprintf("127.0.0.1:%d", port)
 		if err := proc.WaitReady(waitCtx, addr); err != nil {
-			proc.Stop()
+			_ = proc.Stop()
 			return nil, nil, fmt.Errorf("waiting for mihomo batch listener: %w%s", err, tail.Suffix())
 		}
 		urls[i] = "socks5://" + addr

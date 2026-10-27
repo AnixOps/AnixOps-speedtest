@@ -1,3 +1,28 @@
 version: "2"
 linters:
   default: standard
+  settings:
+    errcheck:
+      # Best-effort cleanup/IO calls whose failure is not actionable here.
+      exclude-functions:
+        - (io.Closer).Close
+        - (*os.File).Close
+        - (net.Conn).Close
+        - (net.Listener).Close
+        - (*net.TCPListener).Close
+        - (io.ReadCloser).Close
+        - (*net/http.Response).Body.Close
+        - (*archive/zip.ReadCloser).Close
+        - (*compress/gzip.Reader).Close
+        - (*archive/zip.Writer).Close
+        - os.Remove
+        - os.RemoveAll
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - (*encoding/json.Encoder).Encode
+        - (*bytes.Buffer).WriteString
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters: [errcheck]

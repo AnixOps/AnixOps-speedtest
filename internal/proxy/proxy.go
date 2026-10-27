@@ -158,17 +158,25 @@ func dialSOCKS5(ctx context.Context, dialer *net.Dialer, proxyURL *url.URL, targ
 	}
 
 	// discard bound address
+	var skip int64
 	switch reply[3] {
 	case 0x01:
-		io.CopyN(io.Discard, conn, 4+2)
+		skip = 4 + 2
 	case 0x04:
-		io.CopyN(io.Discard, conn, 16+2)
+		skip = 16 + 2
 	case 0x03:
 		lenByte := make([]byte, 1)
-		io.ReadFull(conn, lenByte)
-		io.CopyN(io.Discard, conn, int64(lenByte[0])+2)
+		if _, err := io.ReadFull(conn, lenByte); err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("read socks5 bound address: %w", err)
+		}
+		skip = int64(lenByte[0]) + 2
 	default:
-		io.CopyN(io.Discard, conn, 2)
+		skip = 2
+	}
+	if _, err := io.CopyN(io.Discard, conn, skip); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("read socks5 bound address: %w", err)
 	}
 
 	return conn, nil

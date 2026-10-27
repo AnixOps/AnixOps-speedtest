@@ -128,7 +128,7 @@ func Start(ctx context.Context, binaryPath string, node NodeConfig, workDir stri
 	waitCtx, cancel := context.WithTimeout(ctx, startupTimeout)
 	defer cancel()
 	if err := proc.WaitReady(waitCtx, socksAddr); err != nil {
-		proc.Stop()
+		_ = proc.Stop()
 		return "", nil, fmt.Errorf("waiting for socks listener: %w%s", err, stderrTail.Suffix())
 	}
 	return "socks5://" + socksAddr, proc.Stop, nil

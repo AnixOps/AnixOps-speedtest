@@ -260,7 +260,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		UnlockTimeout: unlockTimeout,
 	}
 	if jsonlPath != "" {
-		var jw io.Writer = stdout
+		jw := stdout
 		if jsonlPath != "-" {
 			f, err := os.Create(jsonlPath)
 			if err != nil {
@@ -349,7 +349,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 
-	var w io.Writer = stdout
+	w := stdout
 	if outputFile == "" && strings.ToLower(outputFormat) != "table" {
 		// Default output file in output directory based on format
 		var baseName string
@@ -475,7 +475,7 @@ func loadEnvFile() {
 			}
 			// Real environment wins over the .env file.
 			if _, set := os.LookupEnv(key); key != "" && !set {
-				os.Setenv(key, val)
+				_ = os.Setenv(key, val)
 			}
 		}
 	}

@@ -121,7 +121,7 @@ func (p *Proc) Stop() error {
 		p.killMu.Unlock()
 		if err := p.waitErr; err != nil && !errors.Is(err, context.Canceled) {
 			var exitErr *exec.ExitError
-			if !(killed && errors.As(err, &exitErr)) {
+			if !killed || !errors.As(err, &exitErr) {
 				errs = append(errs, err)
 			}
 		}

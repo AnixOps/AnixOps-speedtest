@@ -217,7 +217,7 @@ func runBatched(ctx context.Context, proxies []clash.Proxy, cfg Config, concurre
 		}, report)
 		copy(results[start:end], sub)
 		if stop != nil {
-			stop()
+			_ = stop()
 		}
 	}
 	return results
@@ -377,7 +377,7 @@ func testNode(ctx context.Context, idx int, p clash.Proxy, cfg Config, logger *l
 		return r
 	}
 	if stop != nil {
-		defer stop()
+		defer func() { _ = stop() }()
 	}
 	return testNodeVia(ctx, idx, p, cfg, proxyURL)
 }
@@ -782,7 +782,7 @@ func WriteCSV(w io.Writer, results []NodeResult) {
 	cw := csv.NewWriter(w)
 	defer cw.Flush()
 
-	cw.Write([]string{"index", "name", "type", "server", "port", "http_ms", "tcp_ms", "speed_mbps",
+	_ = cw.Write([]string{"index", "name", "type", "server", "port", "http_ms", "tcp_ms", "speed_mbps",
 		"netflix", "youtube", "disney+", "bilibili", "openai", "claude", "spotify", "tiktok", "wikipedia",
 		"ip_risk_score", "ip_risk_level", "dns_country", "ssh_22", "topology", "error",
 		"http_jitter_ms", "http_loss_pct"})
@@ -832,7 +832,7 @@ func WriteCSV(w io.Writer, results []NodeResult) {
 			loss = strconv.FormatFloat(r.Latency.HTTPLossPct, 'f', 1, 64)
 		}
 
-		cw.Write([]string{
+		_ = cw.Write([]string{
 			strconv.Itoa(r.Index), r.Name, r.Type, r.Server, strconv.Itoa(r.Port),
 			httpMs, tcpMs, speed,
 			unlockMap["netflix"], unlockMap["youtube premium"], unlockMap["disney+"],
