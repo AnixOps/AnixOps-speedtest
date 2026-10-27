@@ -53,6 +53,9 @@ type Config struct {
 	UnlockTimeout time.Duration
 	// UnlockRules overrides the built-in unlock rules when non-nil.
 	UnlockRules []checker.Rule
+	// MihomoBatch > 1 hosts up to that many nodes per mihomo process (one SOCKS
+	// listener each) instead of one process per node. Mihomo kernel only.
+	MihomoBatch int
 	// OnResult, when set, receives each node's result as soon as it finishes.
 	// Calls are serialized.
 	OnResult func(NodeResult)
@@ -158,10 +161,88 @@ func RunAll(ctx context.Context, proxies []clash.Proxy, cfg Config, concurrency 
 	if concurrency < 1 {
 		concurrency = 1
 	}
+	if cfg.Kernel == KernelMihomo && cfg.MihomoBatch > 1 {
+		return runBatched(ctx, proxies, cfg, concurrency, logger)
+	}
+	return runPool(ctx, proxies, cfg, concurrency, logger, func(idx int, p clash.Proxy) NodeResult {
+		return testNode(ctx, idx, p, cfg, logger)
+	})
+}
+
+// runBatched tests proxies in groups of cfg.MihomoBatch, one mihomo process per
+// group. A group that fails to start (e.g. mihomo rejects one proxy's options)
+// degrades to one process per node so a single bad node can't sink its neighbours.
+func runBatched(ctx context.Context, proxies []clash.Proxy, cfg Config, concurrency int, logger *log.Logger) []NodeResult {
+	results := make([]NodeResult, len(proxies))
+	binary, err := mihomo.EnsureBinary(ctx, cfg.BinDir, 60*time.Second)
+	if err != nil {
+		for i, p := range proxies {
+			results[i] = newResult(i, p)
+			results[i].Error = fmt.Sprintf("start proxy: %v", err)
+		}
+		return results
+	}
+	binaryOnce.Do(func() { logger.Printf("using mihomo binary: %s (batches of %d)", binary, cfg.MihomoBatch) })
+
+	var mu sync.Mutex
+	done := 0
+	report := func(r NodeResult) {
+		mu.Lock()
+		defer mu.Unlock()
+		done++
+		logger.Printf("[%d/%d] %s", done, len(proxies), summarize(r))
+		if cfg.OnResult != nil {
+			cfg.OnResult(r)
+		}
+	}
+
+	for start := 0; start < len(proxies) && ctx.Err() == nil; start += cfg.MihomoBatch {
+		end := min(start+cfg.MihomoBatch, len(proxies))
+		group := proxies[start:end]
+		urls, stop, err := mihomo.StartBatch(ctx, binary, group, "", 15*time.Second)
+
+		var urlOf func(i int) (string, bool)
+		if err != nil {
+			logger.Printf("batch %d-%d failed to start (%v); testing those nodes one by one", start+1, end, err)
+			urlOf = func(int) (string, bool) { return "", false }
+		} else {
+			urlOf = func(i int) (string, bool) { return urls[i], true }
+		}
+
+		sub := runPoolOffset(ctx, group, start, concurrency, func(idx int, p clash.Proxy) NodeResult {
+			if u, ok := urlOf(idx - start); ok {
+				return testNodeVia(ctx, idx, p, cfg, u)
+			}
+			return testNode(ctx, idx, p, cfg, logger)
+		}, report)
+		copy(results[start:end], sub)
+		if stop != nil {
+			stop()
+		}
+	}
+	return results
+}
+
+func runPool(ctx context.Context, proxies []clash.Proxy, cfg Config, concurrency int, logger *log.Logger, run func(int, clash.Proxy) NodeResult) []NodeResult {
+	var mu sync.Mutex
+	done := 0
+	report := func(r NodeResult) {
+		mu.Lock()
+		defer mu.Unlock()
+		done++
+		logger.Printf("[%d/%d] %s", done, len(proxies), summarize(r))
+		if cfg.OnResult != nil {
+			cfg.OnResult(r)
+		}
+	}
+	return runPoolOffset(ctx, proxies, 0, concurrency, run, report)
+}
+
+// runPoolOffset runs run for each proxy with bounded concurrency; indexes passed
+// to run are offset+position so results keep their global node number.
+func runPoolOffset(ctx context.Context, proxies []clash.Proxy, offset, concurrency int, run func(int, clash.Proxy) NodeResult, report func(NodeResult)) []NodeResult {
 	results := make([]NodeResult, len(proxies))
 	var wg sync.WaitGroup
-	var mu sync.Mutex // guards done and OnResult
-	done := 0
 	sem := make(chan struct{}, concurrency)
 
 	for i, p := range proxies {
@@ -174,22 +255,16 @@ func RunAll(ctx context.Context, proxies []clash.Proxy, cfg Config, concurrency 
 			select {
 			case sem <- struct{}{}:
 			case <-ctx.Done():
-				results[idx] = NodeResult{Index: idx, Name: proxy.Name, Type: proxy.Type, Server: proxy.Server, Port: proxy.Port, Error: "cancelled"}
+				results[idx-offset] = NodeResult{Index: idx, Name: proxy.Name, Type: proxy.Type, Server: proxy.Server, Port: proxy.Port, Error: "cancelled"}
 				return
 			}
 			defer func() { <-sem }()
 
-			r := testNode(ctx, idx, proxy, cfg, logger)
-			results[idx] = r
+			r := run(idx, proxy)
+			results[idx-offset] = r
 
-			mu.Lock()
-			done++
-			logger.Printf("[%d/%d] %s", done, len(proxies), summarize(r))
-			if cfg.OnResult != nil {
-				cfg.OnResult(r)
-			}
-			mu.Unlock()
-		}(i, p)
+			report(r)
+		}(offset+i, p)
 	}
 
 	wg.Wait()
@@ -295,22 +370,25 @@ func evidenceSliceFromTopo(evs []topo.Evidence) []Evidence {
 }
 
 func testNode(ctx context.Context, idx int, p clash.Proxy, cfg Config, logger *log.Logger) NodeResult {
-	result := NodeResult{
-		Index:  idx,
-		Name:   p.Name,
-		Type:   p.Type,
-		Server: p.Server,
-		Port:   p.Port,
-	}
-
 	proxyURL, stop, err := startProxyForNode(ctx, p, cfg, logger)
 	if err != nil {
-		result.Error = fmt.Sprintf("start proxy: %v", err)
-		return result
+		r := newResult(idx, p)
+		r.Error = fmt.Sprintf("start proxy: %v", err)
+		return r
 	}
 	if stop != nil {
 		defer stop()
 	}
+	return testNodeVia(ctx, idx, p, cfg, proxyURL)
+}
+
+func newResult(idx int, p clash.Proxy) NodeResult {
+	return NodeResult{Index: idx, Name: p.Name, Type: p.Type, Server: p.Server, Port: p.Port}
+}
+
+// testNodeVia runs every enabled check through an already-running proxy.
+func testNodeVia(ctx context.Context, idx int, p clash.Proxy, cfg Config, proxyURL string) NodeResult {
+	result := newResult(idx, p)
 
 	var allEvidence []Evidence
 

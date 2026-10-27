@@ -104,21 +104,30 @@ func Start(ctx context.Context, binaryPath string, proxy clash.Proxy, workDir st
 }
 
 type mihomoConfig struct {
-	Port               int          `yaml:"port,omitempty"`
-	SocksPort          int          `yaml:"socks-port,omitempty"`
-	MixedPort          int          `yaml:"mixed-port,omitempty"`
-	AllowLan           bool         `yaml:"allow-lan,omitempty"`
-	Mode               string       `yaml:"mode"`
-	LogLevel           string       `yaml:"log-level"`
-	Ipv6               bool         `yaml:"ipv6,omitempty"`
-	ExternalController string       `yaml:"external-controller,omitempty"`
-	Proxies            []proxyEntry `yaml:"proxies"`
-	ProxyGroups        []proxyGroup `yaml:"proxy-groups"`
-	Rules              []string     `yaml:"rules"`
-	Dns                *dnsConfig   `yaml:"dns,omitempty"`
+	Port               int             `yaml:"port,omitempty"`
+	SocksPort          int             `yaml:"socks-port,omitempty"`
+	MixedPort          int             `yaml:"mixed-port,omitempty"`
+	AllowLan           bool            `yaml:"allow-lan,omitempty"`
+	Mode               string          `yaml:"mode"`
+	LogLevel           string          `yaml:"log-level"`
+	Ipv6               bool            `yaml:"ipv6,omitempty"`
+	ExternalController string          `yaml:"external-controller,omitempty"`
+	Proxies            []proxyEntry    `yaml:"proxies"`
+	ProxyGroups        []proxyGroup    `yaml:"proxy-groups"`
+	Rules              []string        `yaml:"rules"`
+	Dns                *dnsConfig      `yaml:"dns,omitempty"`
+	Listeners          []listenerEntry `yaml:"listeners,omitempty"`
 }
 
 type proxyEntry map[string]any
+
+type listenerEntry struct {
+	Name   string `yaml:"name"`
+	Type   string `yaml:"type"`
+	Port   int    `yaml:"port"`
+	Listen string `yaml:"listen"`
+	Proxy  string `yaml:"proxy"`
+}
 
 type proxyGroup struct {
 	Name    string   `yaml:"name"`
@@ -143,9 +152,10 @@ func mihomoType(t string) string {
 	return t
 }
 
-func buildConfig(proxy clash.Proxy, socksPort, httpPort, mixedPort int) ([]byte, error) {
+// buildEntry renders one proxy in mihomo syntax under the given (unique) name.
+func buildEntry(proxy clash.Proxy, name string) proxyEntry {
 	entry := make(proxyEntry)
-	entry["name"] = proxy.Name
+	entry["name"] = name
 	entry["type"] = mihomoType(proxy.Type)
 	entry["server"] = proxy.Server
 	entry["port"] = proxy.Port
@@ -215,6 +225,11 @@ func buildConfig(proxy clash.Proxy, socksPort, httpPort, mixedPort int) ([]byte,
 	if proxy.ClientFingerprint != "" {
 		entry["client-fingerprint"] = proxy.ClientFingerprint
 	}
+	return entry
+}
+
+func buildConfig(proxy clash.Proxy, socksPort, httpPort, mixedPort int) ([]byte, error) {
+	entry := buildEntry(proxy, proxy.Name)
 
 	cfg := mihomoConfig{
 		SocksPort: socksPort,
@@ -423,4 +438,96 @@ func portOf(addr string) (int, error) {
 		return 0, err
 	}
 	return strconv.Atoi(portStr)
+}
+
+// buildBatchConfig renders one mihomo config hosting every proxy, each exposed on
+// its own loopback SOCKS listener that routes only to that proxy.
+func buildBatchConfig(proxies []clash.Proxy, ports []int) ([]byte, error) {
+	if len(proxies) != len(ports) {
+		return nil, fmt.Errorf("batch: %d proxies but %d ports", len(proxies), len(ports))
+	}
+	cfg := mihomoConfig{
+		Mode:     "rule",
+		LogLevel: "error",
+		Rules:    []string{"MATCH,DIRECT"},
+		Dns: &dnsConfig{
+			Enable:     true,
+			Nameserver: []string{"https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"},
+		},
+	}
+	for i, p := range proxies {
+		name := fmt.Sprintf("n%d", i)
+		cfg.Proxies = append(cfg.Proxies, buildEntry(p, name))
+		cfg.Listeners = append(cfg.Listeners, listenerEntry{
+			Name: "l" + name, Type: "socks", Port: ports[i], Listen: "127.0.0.1", Proxy: name,
+		})
+	}
+	return yaml.Marshal(cfg)
+}
+
+// StartBatch launches ONE mihomo process for all proxies and returns a SOCKS5 URL
+// per proxy (same order) plus a stop hook. If mihomo rejects any single proxy the
+// whole batch fails to start; callers should then fall back to Start per node.
+func StartBatch(ctx context.Context, binaryPath string, proxies []clash.Proxy, workDir string, startupTimeout time.Duration) ([]string, func() error, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if len(proxies) == 0 {
+		return nil, nil, fmt.Errorf("batch: no proxies")
+	}
+	binaryPath = strings.TrimSpace(binaryPath)
+	if binaryPath == "" || startupTimeout <= 0 {
+		return nil, nil, fmt.Errorf("batch: binary path and positive startup timeout are required")
+	}
+	ports := make([]int, len(proxies))
+	for i := range ports {
+		addr, err := kernel.ReservePort()
+		if err != nil {
+			return nil, nil, err
+		}
+		if ports[i], err = portOf(addr); err != nil {
+			return nil, nil, err
+		}
+	}
+	if workDir != "" {
+		if err := os.MkdirAll(workDir, 0o755); err != nil {
+			return nil, nil, fmt.Errorf("failed to prepare workDir: %w", err)
+		}
+	}
+	tmpDir, err := os.MkdirTemp(workDir, "speedtest-mihomo-batch-")
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create temp dir: %w", err)
+	}
+	cfgYAML, err := buildBatchConfig(proxies, ports)
+	if err != nil {
+		os.RemoveAll(tmpDir)
+		return nil, nil, err
+	}
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	if err := os.WriteFile(configPath, cfgYAML, 0o600); err != nil {
+		os.RemoveAll(tmpDir)
+		return nil, nil, fmt.Errorf("failed to write config: %w", err)
+	}
+
+	cmd := exec.CommandContext(ctx, kernel.ExecPath(binaryPath), "-d", tmpDir, "-f", configPath)
+	tail := &kernel.TailBuffer{Max: 2048}
+	cmd.Stderr = tail
+	if err := cmd.Start(); err != nil {
+		os.RemoveAll(tmpDir)
+		return nil, nil, fmt.Errorf("failed to start mihomo: %w", err)
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, startupTimeout)
+	defer cancel()
+	urls := make([]string, len(ports))
+	for i, port := range ports {
+		addr := fmt.Sprintf("127.0.0.1:%d", port)
+		if err := kernel.WaitForListener(waitCtx, addr); err != nil {
+			cmd.Process.Kill()
+			cmd.Wait()
+			os.RemoveAll(tmpDir)
+			return nil, nil, fmt.Errorf("waiting for mihomo batch listener: %w%s", err, tail.Suffix())
+		}
+		urls[i] = "socks5://" + addr
+	}
+	return urls, kernel.NewStopper(cmd, tmpDir), nil
 }

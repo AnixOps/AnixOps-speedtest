@@ -82,6 +82,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		quiet           bool
 		configPath      string
 		unlockRules     string
+		mihomoBatch     int
 	)
 
 	fs.StringVar(&configFile, "f", "", "path to Clash YAML config file")
@@ -119,6 +120,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&jsonlPath, "jsonl", "", "stream each node's result as a JSON line to this file as it completes (- for stdout)")
 	fs.BoolVar(&quiet, "q", false, "suppress progress logging")
 
+	fs.IntVar(&mihomoBatch, "mihomo-batch", 0, "host up to N nodes per mihomo process (0 = one process per node)")
 	fs.StringVar(&unlockRules, "unlock-rules", "", "YAML file that overrides/extends the built-in unlock rules")
 	fs.StringVar(&configPath, "config", "", "YAML file of option defaults, keyed by flag name (default: ./speedtest.yaml if present)")
 
