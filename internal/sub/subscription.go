@@ -42,6 +42,15 @@ type Node struct {
 }
 
 func FetchAndParse(ctx context.Context, subscriptionURL string, userAgent string) ([]Node, error) {
+	body, err := Fetch(ctx, subscriptionURL, userAgent)
+	if err != nil {
+		return nil, err
+	}
+	return Parse(body)
+}
+
+// Fetch downloads the raw subscription body.
+func Fetch(ctx context.Context, subscriptionURL string, userAgent string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, subscriptionURL, nil)
 	if err != nil {
 		return nil, err
@@ -62,11 +71,12 @@ func FetchAndParse(ctx context.Context, subscriptionURL string, userAgent string
 		return nil, fmt.Errorf("subscription fetch: status %s", resp.Status)
 	}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
+	return io.ReadAll(resp.Body)
+}
 
+// Parse turns a subscription body (Clash YAML, share links, or base64 of
+// either) into nodes.
+func Parse(body []byte) ([]Node, error) {
 	content := strings.TrimSpace(string(body))
 
 	// 1. Try Clash YAML first (subscription may return Clash config directly)

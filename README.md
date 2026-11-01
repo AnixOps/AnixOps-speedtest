@@ -48,6 +48,7 @@ reported immediately and skip the remaining checks.
 |------|---------|-------------|
 | `-f` / `-sub` | – | Clash YAML file, or subscription URL (one is required) |
 | `-sub-ua` | `clash.meta` (`AnixOpsNet` with `-kernel anx`) | User-Agent for the subscription fetch |
+| `-sub-cache` | – | File that keeps the last subscription body that parsed; when a `-sub` fetch fails (network, non-200, no nodes) the run uses it instead, with a warning. Written 0600 |
 | `-config` | `./speedtest.yaml` if present | YAML of option defaults, keyed by flag name; CLI flags win |
 | `-kernel` | `mihomo` | `mihomo`, `xray` or `anx` |
 | `-anx-bin` | `$SPEEDTEST_ANX_BIN`, `<bin-dir>/anx-proxy`, next to speedtest, `PATH` | `anx-proxy` for `-kernel anx` (never downloaded) |
