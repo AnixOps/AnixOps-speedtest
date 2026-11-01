@@ -36,6 +36,9 @@ type Node struct {
 	// Extra carries protocol-specific options (hysteria2, tuic, ...) verbatim, using
 	// Clash/mihomo key names, so the mihomo kernel can consume them unchanged.
 	Extra map[string]any
+	// Link is the share link the node was parsed from (empty for Clash YAML),
+	// handed verbatim to kernels that import links themselves (anx).
+	Link string
 }
 
 func FetchAndParse(ctx context.Context, subscriptionURL string, userAgent string) ([]Node, error) {
@@ -108,6 +111,7 @@ func parseSubscription(content string) []Node {
 		if err != nil {
 			continue
 		}
+		node.Link = line
 		nodes = append(nodes, node)
 	}
 	return nodes
@@ -262,6 +266,8 @@ func parseLine(raw string) (Node, error) {
 		return parseHysteria2(line)
 	case strings.HasPrefix(strings.ToLower(line), "tuic://"):
 		return parseTUIC(line)
+	case strings.HasPrefix(strings.ToLower(line), "anx://"):
+		return parseAnx(line)
 	default:
 		return Node{}, errors.New("unsupported scheme")
 	}
@@ -546,6 +552,31 @@ func parseTUIC(line string) (Node, error) {
 		Password: pw,
 		SNI:      q.Get("sni"),
 		Extra:    extra,
+	}, nil
+}
+
+// parseAnx reads the parts of an anx:// link (an ANX-A node in the AnixOps Net
+// subscription: anx://<user key>@host:port?pk=...#name) needed to name and
+// label the node. Only the anx kernel can run it; it gets the link verbatim.
+func parseAnx(line string) (Node, error) {
+	u, err := url.Parse(line)
+	if err != nil {
+		return Node{}, err
+	}
+	if u.User == nil || u.User.Username() == "" || u.Hostname() == "" || u.Port() == "" {
+		return Node{}, errors.New("anx: missing user key, host or port")
+	}
+	q := u.Query()
+	if q.Get("pk") == "" {
+		return Node{}, errors.New("anx: missing server public key")
+	}
+	return Node{
+		Protocol: "anx",
+		Server:   u.Hostname(),
+		Port:     u.Port(),
+		Name:     decodeFragment(u.Fragment),
+		Password: u.User.Username(),
+		SNI:      q.Get("sni"),
 	}, nil
 }
 

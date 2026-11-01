@@ -83,6 +83,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		configPath      string
 		unlockRules     string
 		mihomoBatch     int
+		anxBin          string
 	)
 
 	fs.StringVar(&configFile, "f", "", "path to Clash YAML config file")
@@ -93,7 +94,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&outputDir, "output-dir", "output", "directory for output files (default: output/)")
 	fs.StringVar(&binDir, "bin-dir", "bin", "directory for downloaded kernel binaries (default: bin/)")
 	fs.StringVar(&keyDir, "key-dir", ".keys", "directory for Ed25519 signing keys (default: .keys/)")
-	fs.StringVar(&kernel, "kernel", "mihomo", "proxy kernel: mihomo or xray")
+	fs.StringVar(&kernel, "kernel", "mihomo", "proxy kernel: mihomo, xray or anx")
+	fs.StringVar(&anxBin, "anx-bin", "", "anx-proxy binary for -kernel anx (default: $SPEEDTEST_ANX_BIN, <bin-dir>/anx-proxy, PATH)")
 	fs.DurationVar(&timeout, "timeout", 10*time.Second, "per-probe timeout")
 	fs.IntVar(&concurrency, "c", 5, "concurrent test workers")
 	fs.BoolVar(&skipLatency, "skip-latency", false, "skip HTTP latency test")
@@ -159,6 +161,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
+	kernelMode := probe.Kernel(strings.ToLower(strings.TrimSpace(kernel)))
+	switch kernelMode {
+	case probe.KernelXray, probe.KernelMihomo, probe.KernelAnx:
+	default:
+		fmt.Fprintf(stderr, "error: unsupported kernel %q (allowed: xray, mihomo, anx)\n", kernel)
+		return 2
+	}
+	// The anx kernel needs share links (anx:// among them), which AnixOps
+	// Control serves to the AnixOps Net User-Agent; its default UA gets Clash YAML.
+	if kernelMode == probe.KernelAnx && !flagSet(fs, "sub-ua") {
+		subUserAgent = anxSubUserAgent
+	}
+
 	var proxies []clash.Proxy
 	var source string
 
@@ -220,12 +235,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	kernelMode := probe.Kernel(strings.ToLower(strings.TrimSpace(kernel)))
-	if kernelMode != probe.KernelXray && kernelMode != probe.KernelMihomo {
-		fmt.Fprintf(stderr, "error: unsupported kernel %q (allowed: xray, mihomo)\n", kernel)
-		return 2
-	}
-
 	if latencyOnly {
 		skipSpeed = true
 		skipUnlock = true
@@ -245,6 +254,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		UnlockRules:   rules,
 		MihomoBatch:   mihomoBatch,
 		Kernel:        kernelMode,
+		AnxBin:        anxBin,
 		Timeout:       timeout,
 		DownloadSize:  downloadSize,
 		SkipLatency:   skipLatency,
@@ -289,7 +299,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if pushgateway != "" {
 		cfAccessID := os.Getenv("CF_ACCESS_CLIENT_ID")
 		cfAccessSecret := os.Getenv("CF_ACCESS_CLIENT_SECRET")
-		if err := prom.PushMetrics(pushgateway, promJob, results, cfAccessID, cfAccessSecret); err != nil {
+		if err := prom.PushMetrics(pushgateway, promJob, string(kernelMode), results, cfAccessID, cfAccessSecret); err != nil {
 			logger.Printf("warning: failed to push metrics: %v", err)
 		} else {
 			logger.Printf("pushed metrics to Pushgateway %s (job=%s)", pushgateway, promJob)
@@ -436,6 +446,7 @@ func subNodeToClashProxy(n sub.Node) clash.Proxy {
 		ClientFingerprint: n.ClientFingerprint,
 		Flow:              n.Flow,
 		Extra:             n.Extra,
+		ShareLink:         n.Link,
 	}
 
 	if p.Type == "ss" {
@@ -443,6 +454,21 @@ func subNodeToClashProxy(n sub.Node) clash.Proxy {
 	}
 
 	return p
+}
+
+// anxSubUserAgent makes AnixOps Control answer with its AnixOps Net share-link
+// format, the only one that carries anx:// nodes.
+const anxSubUserAgent = "AnixOpsNet"
+
+// flagSet reports whether name was given on the command line or by the config file.
+func flagSet(fs *flag.FlagSet, name string) bool {
+	set := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			set = true
+		}
+	})
+	return set
 }
 
 func hexPubKey(pub ed25519.PublicKey) string {
