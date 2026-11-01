@@ -51,6 +51,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		configFile      string
 		subscriptionURL string
 		subUserAgent    string
+		subCache        string
 		outputFormat    string
 		outputFile      string
 		outputDir       string
@@ -89,6 +90,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&configFile, "f", "", "path to Clash YAML config file")
 	fs.StringVar(&subscriptionURL, "sub", "", "v2ray subscription URL (alternative to -f)")
 	fs.StringVar(&subUserAgent, "sub-ua", "clash.meta", "User-Agent for subscription fetch")
+	fs.StringVar(&subCache, "sub-cache", "", "file holding the last good -sub body; used when a fetch fails")
 	fs.StringVar(&outputFormat, "format", "table", "output format: table, json, csv, chart, png")
 	fs.StringVar(&outputFile, "o", "", "write output to file (default: outputDir)")
 	fs.StringVar(&outputDir, "output-dir", "output", "directory for output files (default: output/)")
@@ -188,12 +190,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 	} else {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		nodes, err := sub.FetchAndParse(ctx, subscriptionURL, subUserAgent)
-		if err != nil {
+		res, err := sub.FetchWithCache(ctx, subscriptionURL, subUserAgent, subCache)
+		if err != nil && len(res.Nodes) == 0 {
 			fmt.Fprintf(stderr, "failed to fetch subscription: %v\n", err)
 			return 1
 		}
-		for _, n := range nodes {
+		if err != nil {
+			fmt.Fprintf(stderr, "warning: %v\n", err)
+		}
+		if res.FromCache {
+			fmt.Fprintf(stderr, "warning: failed to fetch subscription (%v); using the cached copy %s\n", res.FetchErr, subCache)
+		}
+		for _, n := range res.Nodes {
 			p := subNodeToClashProxy(n)
 			if p.Name != "" && p.Server != "" && p.Port > 0 {
 				proxies = append(proxies, p)
