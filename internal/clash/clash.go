@@ -30,6 +30,9 @@ type Proxy struct {
 	UDP               bool            `yaml:"udp,omitempty"`
 	ClientFingerprint string          `yaml:"client-fingerprint,omitempty"`
 	Extra             map[string]any  `yaml:",inline"`
+	// ShareLink is the subscription line this proxy came from, if any; the anx
+	// kernel imports it verbatim. Never serialized into kernel configs.
+	ShareLink string `yaml:"-"`
 }
 
 type WSOptions struct {

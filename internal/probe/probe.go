@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/anixops/speedtest/internal/anx"
 	"github.com/anixops/speedtest/internal/checker"
 	"github.com/anixops/speedtest/internal/clash"
 	"github.com/anixops/speedtest/internal/mihomo"
@@ -31,6 +32,9 @@ type Kernel string
 const (
 	KernelXray   Kernel = "xray"
 	KernelMihomo Kernel = "mihomo"
+	// KernelAnx runs each node through an external anx-proxy (the AnixOps Net
+	// client engine with ANX), fed the node's share link.
+	KernelAnx Kernel = "anx"
 )
 
 type Config struct {
@@ -45,6 +49,8 @@ type Config struct {
 	SkipDNS      bool
 	SkipSSH      bool
 	BinDir       string
+	// AnxBin is the anx-proxy binary for KernelAnx (empty = search, see anx.ResolveBinary).
+	AnxBin string
 	// Repeat is how many latency samples to take per node (<=1 means one).
 	Repeat int
 	// SpeedTimeout / UnlockTimeout override Timeout for those phases (0 = default:
@@ -467,6 +473,13 @@ func startProxyForNode(ctx context.Context, p clash.Proxy, cfg Config, logger *l
 	var err error
 
 	switch cfg.Kernel {
+	case KernelAnx:
+		binaryPath, err = anx.ResolveBinary(cfg.AnxBin, cfg.BinDir)
+		if err != nil {
+			return "", nil, err
+		}
+		binaryOnce.Do(func() { logger.Printf("using anx-proxy binary: %s", binaryPath) })
+		return anx.Start(ctx, binaryPath, p.ShareLink, "", 8*time.Second)
 	case KernelMihomo:
 		binaryPath, err = mihomo.EnsureBinary(ctx, cfg.BinDir, 60*time.Second)
 		if err != nil {

@@ -17,8 +17,9 @@ import (
 // any endpoint that accepts OpenMetrics text format via POST.
 // endpointURL is like "https://prometheus.anixops.com" —
 // "/metrics/job/{job}" is appended automatically.
+// kernel labels every series with the proxy kernel that ran the test.
 // accessID/accessSecret are optional Cloudflare Access Service Token credentials.
-func PushMetrics(endpointURL, job string, results []probe.NodeResult, accessID, accessSecret string) error {
+func PushMetrics(endpointURL, job, kernel string, results []probe.NodeResult, accessID, accessSecret string) error {
 	var buf bytes.Buffer
 
 	instance := hostname()
@@ -33,11 +34,12 @@ func PushMetrics(endpointURL, job string, results []probe.NodeResult, accessID, 
 	now := float64(time.Now().Unix())
 
 	for _, r := range results {
-		labels := fmt.Sprintf(`{instance="%s",node="%s",server="%s",type="%s"}`,
+		labels := fmt.Sprintf(`{instance="%s",node="%s",server="%s",type="%s",kernel="%s"}`,
 			instance,
 			escapeLabel(r.Name),
 			escapeLabel(fmt.Sprintf("%s:%d", r.Server, r.Port)),
 			escapeLabel(r.Type),
+			escapeLabel(kernel),
 		)
 
 		buf.WriteString(fmt.Sprintf("speedtest_test_timestamp%s %.0f\n", labels, now))

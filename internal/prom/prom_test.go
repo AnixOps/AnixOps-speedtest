@@ -46,13 +46,13 @@ func TestPushMetrics(t *testing.T) {
 		{Name: `HK "01"`, Type: "vmess", Server: "hk.example.com", Port: 443, Latency: &probe.LatencyResult{HTTPMs: 12.5, TCPMs: 3}},
 		{Name: "down", Type: "ss", Server: "x", Port: 1, Error: "timeout"},
 	}
-	if err := PushMetrics(srv.URL, "speedtest", results, "cid", "secret"); err != nil {
+	if err := PushMetrics(srv.URL, "speedtest", "mihomo", results, "cid", "secret"); err != nil {
 		t.Fatal(err)
 	}
 	if id != "cid" {
 		t.Errorf("access header missing")
 	}
-	for _, want := range []string{`node="HK \"01\""`, "speedtest_http_latency_ms{", " 12.50\n", `speedtest_node_up{instance=`, `node="down"`} {
+	for _, want := range []string{`node="HK \"01\""`, "speedtest_http_latency_ms{", " 12.50\n", `speedtest_node_up{instance=`, `node="down"`, `kernel="mihomo"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("body missing %q:\n%s", want, body)
 		}
@@ -65,7 +65,7 @@ func TestPushMetrics(t *testing.T) {
 func TestPushMetricsServerError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "boom", 500) }))
 	defer srv.Close()
-	if err := PushMetrics(srv.URL, "j", nil, "", ""); err == nil {
+	if err := PushMetrics(srv.URL, "j", "mihomo", nil, "", ""); err == nil {
 		t.Fatal("expected error on 500")
 	}
 }

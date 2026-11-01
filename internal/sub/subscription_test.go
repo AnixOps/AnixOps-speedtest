@@ -2,6 +2,7 @@ package sub
 
 import (
 	"encoding/base64"
+	"strings"
 	"testing"
 )
 
@@ -133,5 +134,20 @@ func TestClashYAMLKeepsExtrasForNativeProtocols(t *testing.T) {
 	nodes := parseClashYAML(y)
 	if len(nodes) != 1 || nodes[0].Extra["obfs"] != "salamander" || nodes[0].Extra["up"] != "50 Mbps" {
 		t.Fatalf("unexpected %+v", nodes)
+	}
+}
+
+func TestParseAnxKeepsLink(t *testing.T) {
+	link := "anx://" + strings.Repeat("ab", 32) + "@anx.example.com:8443?sni=www.example.com&pk=PUBKEY&fp=chrome&wg_port=51820#FR%20ANX"
+	nodes := parseSubscription(link + "\niwan://u:p@line.example.com:5000?encrypt=1#line\nanx://k@h.example.com:443#no-pk")
+	if len(nodes) != 1 {
+		t.Fatalf("want 1 node (iwan and anx without pk skipped), got %+v", nodes)
+	}
+	n := nodes[0]
+	if n.Protocol != "anx" || n.Server != "anx.example.com" || n.Port != "8443" || n.Name != "FR ANX" || n.SNI != "www.example.com" {
+		t.Fatalf("unexpected %+v", n)
+	}
+	if n.Link != link {
+		t.Fatalf("link not kept verbatim: %q", n.Link)
 	}
 }

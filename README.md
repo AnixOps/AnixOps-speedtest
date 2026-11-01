@@ -5,6 +5,7 @@ local proxy kernel per node (or per batch), routes every probe through it, and r
 service unlocks and exit-IP reputation — with signed, tamper-evident reports.
 
 Default kernel: [mihomo](https://github.com/MetaCubeX/mihomo). [xray-core](https://github.com/XTLS/Xray-core) is supported for VMess/VLESS/Trojan/Shadowsocks.
+`-kernel anx` runs every node through an external `anx-proxy` (the AnixOps Net client engine, including ANX `anx://` nodes); see [ANX kernel](#anx-kernel).
 
 ## Install
 
@@ -46,9 +47,10 @@ reported immediately and skip the remaining checks.
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-f` / `-sub` | – | Clash YAML file, or subscription URL (one is required) |
-| `-sub-ua` | `clash.meta` | User-Agent for the subscription fetch |
+| `-sub-ua` | `clash.meta` (`AnixOpsNet` with `-kernel anx`) | User-Agent for the subscription fetch |
 | `-config` | `./speedtest.yaml` if present | YAML of option defaults, keyed by flag name; CLI flags win |
-| `-kernel` | `mihomo` | `mihomo` or `xray` |
+| `-kernel` | `mihomo` | `mihomo`, `xray` or `anx` |
+| `-anx-bin` | `$SPEEDTEST_ANX_BIN`, `<bin-dir>/anx-proxy`, next to speedtest, `PATH` | `anx-proxy` for `-kernel anx` (never downloaded) |
 | `-format` | `table` | `table`, `json`, `csv`, `chart`, `png` (non-table default to `output/`) |
 | `-o`, `-output-dir`, `-bin-dir`, `-key-dir` | – / `output` / `bin` / `.keys` | Paths |
 | `-c` | `5` | Concurrent workers |
@@ -99,6 +101,15 @@ skip-ssh: true
 |--------|-----------|
 | mihomo | VMess, VLESS (incl. Reality), Trojan, Shadowsocks, **and everything mihomo supports natively** (Hysteria2, TUIC, … — options are forwarded verbatim from Clash YAML) |
 | xray | VMess, VLESS (incl. Reality), Trojan, Shadowsocks |
+| anx | whatever the AnixOps Net client engine imports from a share link: ANX (`anx://`), VLESS, VMess, Trojan, Shadowsocks, Hysteria2, TUIC |
+
+### ANX kernel
+
+`anx-proxy` is a separate binary that is not part of this repository or its releases; speedtest only starts it as a
+process (`anx-proxy --link <file> --listen 127.0.0.1:<port>`), one per node, with the node's share link in a private
+0600 file. It needs share links, so use a share-link subscription: against AnixOps Control the default User-Agent
+becomes `AnixOpsNet`, which selects the AnixOps Net format (the one that carries `anx://`). A Clash YAML input has no
+links and every node fails with a clear error. `iwan://` lines are skipped.
 
 Share links parsed from subscriptions: `vmess://`, `vless://`, `trojan://`, `ss://`, `hysteria2://`/`hy2://`, `tuic://`.
 Note: nodes from subscriptions are tested with certificate verification **off**.
@@ -125,7 +136,8 @@ authenticate the author — use `verify` with a pinned key for that.
 ## Prometheus
 
 `-pushgateway URL` pushes `speedtest_node_up`, `speedtest_http_latency_ms`, `speedtest_tcp_latency_ms`, and (with `-repeat > 1`)
-`speedtest_http_jitter_ms`, `speedtest_http_loss_pct`. `scripts/speedtest-cron.sh` wraps this for cron (set `SUB_URL` or pass a config).
+`speedtest_http_jitter_ms`, `speedtest_http_loss_pct`. Every series carries `instance`, `node`, `server`, `type` and `kernel`
+labels. `scripts/speedtest-cron.sh` wraps this for cron (set `SUB_URL` or pass a config; `KERNEL=anx ANX_BIN=...` for ANX).
 
 ## Layout
 
@@ -133,6 +145,7 @@ authenticate the author — use `verify` with a pinned key for that.
 cmd/speedtest      CLI, config file, verify subcommand
 internal/kernel    shared kernel download+SHA-256 verification, process supervision
 internal/mihomo    mihomo launcher (single node or batch)     internal/xray   xray launcher
+internal/anx       external anx-proxy launcher (per node, from the share link)
 internal/probe     orchestration, latency/speed, redaction, table/CSV
 internal/checker   unlock rules engine, IP reputation, DNS, SSH
 internal/ats       certificate, signing (Ed25519 + ML-DSA), verification, OTS, QR
