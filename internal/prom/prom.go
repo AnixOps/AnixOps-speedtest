@@ -26,6 +26,8 @@ func PushMetrics(endpointURL, job, kernel string, results []probe.NodeResult, ac
 
 	fmt.Fprintf(&buf, "# TYPE speedtest_http_latency_ms gauge\n")
 	fmt.Fprintf(&buf, "# TYPE speedtest_tcp_latency_ms gauge\n")
+	fmt.Fprintf(&buf, "# TYPE speedtest_cold_ms gauge\n")
+	fmt.Fprintf(&buf, "# TYPE speedtest_tcp_warm_ms gauge\n")
 	fmt.Fprintf(&buf, "# TYPE speedtest_http_jitter_ms gauge\n")
 	fmt.Fprintf(&buf, "# TYPE speedtest_http_loss_pct gauge\n")
 	fmt.Fprintf(&buf, "# TYPE speedtest_node_up gauge\n")
@@ -61,6 +63,13 @@ func PushMetrics(endpointURL, job, kernel string, results []probe.NodeResult, ac
 			}
 			if r.Latency.TCPMs > 0 {
 				buf.WriteString(fmt.Sprintf("speedtest_tcp_latency_ms%s %s\n", labels, formatFloat(r.Latency.TCPMs)))
+			}
+			// First connection through a fresh kernel vs later ones on a kept session.
+			if r.Latency.ColdMs > 0 {
+				buf.WriteString(fmt.Sprintf("speedtest_cold_ms%s %s\n", labels, formatFloat(r.Latency.ColdMs)))
+			}
+			if r.Latency.WarmTCPMs > 0 {
+				buf.WriteString(fmt.Sprintf("speedtest_tcp_warm_ms%s %s\n", labels, formatFloat(r.Latency.WarmTCPMs)))
 			}
 		}
 	}

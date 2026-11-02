@@ -87,6 +87,9 @@ skip-ssh: true
 
 - **HTTP latency** — GET `generate_204` through the node. **TCP latency** — connect **plus one TLS handshake round trip**
   to 1.1.1.1:443 (a bare SOCKS5 connect is acknowledged locally and would "succeed" for dead nodes).
+  With `-repeat > 1` the first TCP+TLS sample is also reported as **cold** (the first connection through a freshly
+  started kernel, which pays the protocol's own handshake) and the median of the later ones as **warm** (they reuse the
+  session the kernel keeps). Every HTTP sample follows a TCP+TLS one, so the HTTP latency is effectively warm.
 - **Speed** — download of `-download-size` bytes (Cloudflare, Hetzner fallback).
 - **Unlocks** — Netflix, YouTube Premium, Disney+, Bilibili, OpenAI, Claude, Spotify, TikTok, Wikipedia. Each verdict carries a
   `confidence` (`high|medium|low`). Rules live in [`internal/checker/rules.yaml`](internal/checker/rules.yaml) — edit or extend
@@ -137,7 +140,7 @@ authenticate the author — use `verify` with a pinned key for that.
 ## Prometheus
 
 `-pushgateway URL` pushes `speedtest_node_up`, `speedtest_http_latency_ms`, `speedtest_tcp_latency_ms`, and (with `-repeat > 1`)
-`speedtest_http_jitter_ms`, `speedtest_http_loss_pct`. Every series carries `instance`, `node`, `server`, `type` and `kernel`
+`speedtest_http_jitter_ms`, `speedtest_http_loss_pct`, `speedtest_cold_ms`, `speedtest_tcp_warm_ms`. Every series carries `instance`, `node`, `server`, `type` and `kernel`
 labels. `scripts/speedtest-cron.sh` wraps this for cron (set `SUB_URL` or pass a config; `KERNEL=anx ANX_BIN=...` for ANX).
 
 ## Layout

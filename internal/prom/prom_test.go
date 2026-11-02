@@ -43,7 +43,7 @@ func TestPushMetrics(t *testing.T) {
 	defer srv.Close()
 
 	results := []probe.NodeResult{
-		{Name: `HK "01"`, Type: "vmess", Server: "hk.example.com", Port: 443, Latency: &probe.LatencyResult{HTTPMs: 12.5, TCPMs: 3}},
+		{Name: `HK "01"`, Type: "vmess", Server: "hk.example.com", Port: 443, Latency: &probe.LatencyResult{HTTPMs: 12.5, TCPMs: 3, Samples: 3, ColdMs: 40, WarmTCPMs: 3}},
 		{Name: "down", Type: "ss", Server: "x", Port: 1, Error: "timeout"},
 	}
 	if err := PushMetrics(srv.URL, "speedtest", "mihomo", results, "cid", "secret"); err != nil {
@@ -52,7 +52,7 @@ func TestPushMetrics(t *testing.T) {
 	if id != "cid" {
 		t.Errorf("access header missing")
 	}
-	for _, want := range []string{`node="HK \"01\""`, "speedtest_http_latency_ms{", " 12.50\n", `speedtest_node_up{instance=`, `node="down"`, `kernel="mihomo"`} {
+	for _, want := range []string{`node="HK \"01\""`, "speedtest_http_latency_ms{", " 12.50\n", `speedtest_node_up{instance=`, `node="down"`, `kernel="mihomo"`, "speedtest_cold_ms{", "speedtest_tcp_warm_ms{"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("body missing %q:\n%s", want, body)
 		}

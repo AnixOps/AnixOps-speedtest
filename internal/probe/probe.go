@@ -92,6 +92,12 @@ type LatencyResult struct {
 	HTTPJitterMs float64 `json:"http_jitter_ms,omitempty"`
 	HTTPLossPct  float64 `json:"http_loss_pct,omitempty"`
 	TCPLossPct   float64 `json:"tcp_loss_pct,omitempty"`
+	// ColdMs is the first TCP+TLS sample: the first connection through a freshly
+	// started kernel, so it pays the protocol's cold handshake (e.g. ANX A2 3 RTT).
+	// WarmTCPMs is the median of the later TCP+TLS samples, which reuse whatever
+	// session the kernel keeps. Both are set only with more than one sample.
+	ColdMs    float64 `json:"cold_ms,omitempty"`
+	WarmTCPMs float64 `json:"warm_tcp_ms,omitempty"`
 }
 
 type SpeedResult struct {
