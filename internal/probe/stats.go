@@ -67,12 +67,18 @@ func measureLatencyRepeated(ctx context.Context, proxyURL string, timeout time.D
 	if n <= 1 {
 		return measureLatency(ctx, proxyURL, timeout)
 	}
-	var httpS, tcpS sampleSet
+	var httpS, tcpS, warmS sampleSet
 	var evidence []Evidence
+	var cold float64
 	for i := 0; i < n && ctx.Err() == nil; i++ {
 		r, ev := measureLatency(ctx, proxyURL, timeout)
 		httpS.add(r.HTTPMs, r.HTTPMs > 0)
 		tcpS.add(r.TCPMs, r.TCPMs > 0)
+		if i == 0 {
+			cold = r.TCPMs
+		} else {
+			warmS.add(r.TCPMs, r.TCPMs > 0)
+		}
 		// Keep evidence of the first attempt only; repeats would bloat reports.
 		if i == 0 {
 			evidence = ev
@@ -85,5 +91,7 @@ func measureLatencyRepeated(ctx context.Context, proxyURL string, timeout time.D
 		HTTPJitterMs: httpS.jitter(),
 		HTTPLossPct:  httpS.lossPct(),
 		TCPLossPct:   tcpS.lossPct(),
+		ColdMs:       round1(cold),
+		WarmTCPMs:    round1(warmS.median()),
 	}, evidence
 }
