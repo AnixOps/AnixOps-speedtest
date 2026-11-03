@@ -868,7 +868,7 @@ func dirLoaded(d *DirectionResult) string {
 	if d == nil || d.LoadedMs <= 0 {
 		return "-"
 	}
-	s := fmt.Sprintf("%.0f(+%.0f)", d.LoadedMs, d.BloatMs)
+	s := fmt.Sprintf("%.0f(%+.0f)", d.LoadedMs, d.BloatMs)
 	if d.LoadedLossPct > 0 {
 		s += fmt.Sprintf(" L%.0f%%", d.LoadedLossPct)
 	}
