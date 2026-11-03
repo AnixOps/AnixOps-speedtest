@@ -150,3 +150,29 @@ func TestPercentile(t *testing.T) {
 		t.Fatalf("empty p90 = %v", got)
 	}
 }
+
+func TestMeasureThroughputIdleSkipsColdProbe(t *testing.T) {
+	var calls atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/204", func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			time.Sleep(300 * time.Millisecond) // cold first connection
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("/down", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(make([]byte, 1024))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	res, err := MeasureThroughput(context.Background(), "", 2*time.Second, ThroughputConfig{
+		Conns: 1, Duration: 200 * time.Millisecond, ChunkBytes: 1024,
+		DownURL: srv.URL + "/down?bytes=", ProbeURL: srv.URL + "/204",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IdleMs <= 0 || res.IdleMs >= 300 {
+		t.Fatalf("idle %.1f ms should exclude the slow first probe", res.IdleMs)
+	}
+}
