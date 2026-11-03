@@ -74,6 +74,7 @@ reported immediately and skip the remaining checks.
 | `-jsonl` | – | Stream per-node results as JSON lines to a file (`-` = stdout) |
 | `-no-ats`, `-no-sign` | false | Disable OpenTimestamps anchoring / signatures |
 | `-pushgateway`, `-prom-job` | – / `speedtest` | Push latency metrics to a Prometheus Pushgateway (skips file output) |
+| `-prom-throughput-only` | false | Push only the `-throughput` series |
 | `-q`, `-version` | | Quiet; print version, commit and build date |
 
 A `speedtest.yaml` example:
@@ -154,7 +155,8 @@ authenticate the author — use `verify` with a pinned key for that.
 `-pushgateway URL` pushes `speedtest_node_up`, `speedtest_http_latency_ms`, `speedtest_tcp_latency_ms`, and (with `-repeat > 1`)
 `speedtest_http_jitter_ms`, `speedtest_http_loss_pct`, `speedtest_cold_ms`, `speedtest_tcp_warm_ms`; with `-throughput`
 `speedtest_idle_ms` and, for `down` and `up`, `speedtest_<dir>_mbps`, `_peak_mbps`, `_loaded_ms`, `_bloat_ms`, `_loaded_loss_pct`.
-Push throughput runs under their own `-prom-job` so they don't replace the frequent latency group. Every series carries `instance`, `node`, `server`, `type` and `kernel`
+Push a scheduled throughput run under its own `-prom-job` with `-prom-throughput-only`, so it neither replaces the frequent
+latency group nor leaves a second, stale copy of the latency and `node_up` series (it adds `speedtest_tp_timestamp`). Every series carries `instance`, `node`, `server`, `type` and `kernel`
 labels. `scripts/speedtest-cron.sh` wraps this for cron (set `SUB_URL` or pass a config; `KERNEL=anx ANX_BIN=...` for ANX).
 
 ## Layout

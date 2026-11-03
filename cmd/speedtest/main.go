@@ -92,6 +92,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		tpMaxBytes      int64
 		tpDownURL       string
 		tpUpURL         string
+		promTPOnly      bool
 	)
 
 	fs.StringVar(&configFile, "f", "", "path to Clash YAML config file")
@@ -141,6 +142,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.BoolVar(&tpNoUpload, "tp-no-upload", false, "-throughput: download only")
 	fs.Int64Var(&tpMaxBytes, "tp-max-bytes", 0, "-throughput: stop a direction after this many bytes (0 = no cap)")
 	fs.StringVar(&tpDownURL, "tp-down-url", "", "-throughput download URL; a trailing '=' gets the chunk size (default Cloudflare __down)")
+	fs.BoolVar(&promTPOnly, "prom-throughput-only", false, "with -pushgateway: push only the -throughput series (for a separate throughput job)")
 	fs.StringVar(&tpUpURL, "tp-up-url", "", "-throughput upload URL accepting POST (default Cloudflare __up)")
 
 	if err := fs.Parse(args); err != nil {
@@ -332,7 +334,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if pushgateway != "" {
 		cfAccessID := os.Getenv("CF_ACCESS_CLIENT_ID")
 		cfAccessSecret := os.Getenv("CF_ACCESS_CLIENT_SECRET")
-		if err := prom.PushMetrics(pushgateway, promJob, string(kernelMode), results, cfAccessID, cfAccessSecret); err != nil {
+		pushFn := prom.PushMetrics
+		if promTPOnly {
+			pushFn = prom.PushThroughputMetrics
+		}
+		if err := pushFn(pushgateway, promJob, string(kernelMode), results, cfAccessID, cfAccessSecret); err != nil {
 			logger.Printf("warning: failed to push metrics: %v", err)
 		} else {
 			logger.Printf("pushed metrics to Pushgateway %s (job=%s)", pushgateway, promJob)
