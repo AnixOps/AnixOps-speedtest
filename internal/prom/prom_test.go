@@ -69,3 +69,37 @@ func TestPushMetricsServerError(t *testing.T) {
 		t.Fatal("expected error on 500")
 	}
 }
+
+func TestPushMetricsThroughput(t *testing.T) {
+	var body string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		body = string(b)
+	}))
+	defer srv.Close()
+
+	results := []probe.NodeResult{{
+		Name: "DE", Type: "anx", Server: "de", Port: 443,
+		Latency: &probe.LatencyResult{HTTPMs: 30, TCPMs: 20},
+		Throughput: &probe.ThroughputResult{
+			Conns: 8, IdleMs: 30,
+			Down: &probe.DirectionResult{Mbps: 200, PeakMbps: 250, Bytes: 1, LoadedMs: 60, BloatMs: 30},
+			Up:   &probe.DirectionResult{Mbps: 0, Error: "no data transferred", LoadedLossPct: 100},
+		},
+	}}
+	if err := PushMetrics(srv.URL, "j", "anx", results, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"# TYPE speedtest_down_mbps gauge", "speedtest_idle_ms{", "speedtest_down_mbps{", " 200.00\n",
+		"speedtest_down_peak_mbps{", "speedtest_down_loaded_ms{", "speedtest_down_bloat_ms{",
+		"speedtest_up_mbps{", "speedtest_up_loaded_loss_pct{",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "speedtest_up_loaded_ms{") {
+		t.Errorf("failed upload should not report a loaded latency:\n%s", body)
+	}
+}

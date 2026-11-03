@@ -31,6 +31,9 @@ func PushMetrics(endpointURL, job, kernel string, results []probe.NodeResult, ac
 	fmt.Fprintf(&buf, "# TYPE speedtest_http_jitter_ms gauge\n")
 	fmt.Fprintf(&buf, "# TYPE speedtest_http_loss_pct gauge\n")
 	fmt.Fprintf(&buf, "# TYPE speedtest_node_up gauge\n")
+	for _, m := range throughputMetrics {
+		fmt.Fprintf(&buf, "# TYPE %s gauge\n", m)
+	}
 	fmt.Fprintf(&buf, "# TYPE speedtest_test_timestamp gauge\n")
 
 	now := float64(time.Now().Unix())
@@ -72,6 +75,7 @@ func PushMetrics(endpointURL, job, kernel string, results []probe.NodeResult, ac
 				buf.WriteString(fmt.Sprintf("speedtest_tcp_warm_ms%s %s\n", labels, formatFloat(r.Latency.WarmTCPMs)))
 			}
 		}
+		writeThroughput(&buf, labels, r.Throughput)
 	}
 
 	url := buildPushURL(endpointURL, job)
@@ -129,4 +133,36 @@ func hostname() string {
 		h = "unknown"
 	}
 	return h
+}
+
+var throughputMetrics = []string{
+	"speedtest_idle_ms",
+	"speedtest_down_mbps", "speedtest_down_peak_mbps", "speedtest_down_loaded_ms", "speedtest_down_bloat_ms", "speedtest_down_loaded_loss_pct",
+	"speedtest_up_mbps", "speedtest_up_peak_mbps", "speedtest_up_loaded_ms", "speedtest_up_bloat_ms", "speedtest_up_loaded_loss_pct",
+}
+
+// writeThroughput emits the multi-connection suite; a direction that moved no
+// data reports 0 Mbit/s and no latency series.
+func writeThroughput(buf *bytes.Buffer, labels string, t *probe.ThroughputResult) {
+	if t == nil {
+		return
+	}
+	if t.IdleMs > 0 {
+		fmt.Fprintf(buf, "speedtest_idle_ms%s %s\n", labels, formatFloat(t.IdleMs))
+	}
+	for _, d := range []struct {
+		name string
+		r    *probe.DirectionResult
+	}{{"down", t.Down}, {"up", t.Up}} {
+		if d.r == nil {
+			continue
+		}
+		fmt.Fprintf(buf, "speedtest_%s_mbps%s %s\n", d.name, labels, formatFloat(d.r.Mbps))
+		fmt.Fprintf(buf, "speedtest_%s_peak_mbps%s %s\n", d.name, labels, formatFloat(d.r.PeakMbps))
+		if d.r.LoadedMs > 0 {
+			fmt.Fprintf(buf, "speedtest_%s_loaded_ms%s %s\n", d.name, labels, formatFloat(d.r.LoadedMs))
+			fmt.Fprintf(buf, "speedtest_%s_bloat_ms%s %s\n", d.name, labels, formatFloat(d.r.BloatMs))
+		}
+		fmt.Fprintf(buf, "speedtest_%s_loaded_loss_pct%s %s\n", d.name, labels, formatFloat(d.r.LoadedLossPct))
+	}
 }

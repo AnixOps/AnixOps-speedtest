@@ -62,26 +62,31 @@ type Config struct {
 	// MihomoBatch > 1 hosts up to that many nodes per mihomo process (one SOCKS
 	// listener each) instead of one process per node. Mihomo kernel only.
 	MihomoBatch int
+	// Throughput, when non-nil, runs the multi-connection download/upload suite
+	// with loaded latency (see ThroughputConfig).
+	Throughput *ThroughputConfig
 	// OnResult, when set, receives each node's result as soon as it finishes.
 	// Calls are serialized.
 	OnResult func(NodeResult)
 }
 
 type NodeResult struct {
-	Index    int                      `json:"index"`
-	Name     string                   `json:"name"`
-	Type     string                   `json:"type"`
-	Server   string                   `json:"server"`
-	Port     int                      `json:"port"`
-	Latency  *LatencyResult           `json:"latency,omitempty"`
-	Speed    *SpeedResult             `json:"speed,omitempty"`
-	Unlocks  []checker.UnlockStatus   `json:"unlocks,omitempty"`
-	IPRisk   *checker.IPRiskResult    `json:"ip_risk,omitempty"`
-	DNS      *checker.DNSRegionResult `json:"dns,omitempty"`
-	SSH      *checker.SSHResult       `json:"ssh,omitempty"`
-	Topology *topo.TopologyResult     `json:"topology,omitempty"`
-	Error    string                   `json:"error,omitempty"`
-	Evidence []Evidence               `json:"evidence,omitempty"`
+	Index   int            `json:"index"`
+	Name    string         `json:"name"`
+	Type    string         `json:"type"`
+	Server  string         `json:"server"`
+	Port    int            `json:"port"`
+	Latency *LatencyResult `json:"latency,omitempty"`
+	Speed   *SpeedResult   `json:"speed,omitempty"`
+	// Throughput is the multi-connection suite (download, upload, loaded latency).
+	Throughput *ThroughputResult        `json:"throughput,omitempty"`
+	Unlocks    []checker.UnlockStatus   `json:"unlocks,omitempty"`
+	IPRisk     *checker.IPRiskResult    `json:"ip_risk,omitempty"`
+	DNS        *checker.DNSRegionResult `json:"dns,omitempty"`
+	SSH        *checker.SSHResult       `json:"ssh,omitempty"`
+	Topology   *topo.TopologyResult     `json:"topology,omitempty"`
+	Error      string                   `json:"error,omitempty"`
+	Evidence   []Evidence               `json:"evidence,omitempty"`
 }
 
 type LatencyResult struct {
@@ -295,6 +300,14 @@ func summarize(r NodeResult) string {
 	if r.Speed != nil && r.Speed.Mbps > 0 {
 		parts = append(parts, fmt.Sprintf("speed=%.1fMbps", r.Speed.Mbps))
 	}
+	if t := r.Throughput; t != nil {
+		if t.Down != nil {
+			parts = append(parts, fmt.Sprintf("down=%s loaded=%s", dirSpeed(t.Down), dirLoaded(t.Down)))
+		}
+		if t.Up != nil {
+			parts = append(parts, fmt.Sprintf("up=%s loaded=%s", dirSpeed(t.Up), dirLoaded(t.Up)))
+		}
+	}
 	return strings.Join(parts, " ")
 }
 
@@ -428,6 +441,16 @@ func testNodeVia(ctx context.Context, idx int, p clash.Proxy, cfg Config, proxyU
 		speedResult, ev := measureSpeed(ctx, proxyURL, speedTimeout, cfg.DownloadSize)
 		result.Speed = &speedResult
 		allEvidence = append(allEvidence, ev...)
+	}
+
+	// Multi-connection throughput and loaded latency
+	if cfg.Throughput != nil {
+		tp, err := MeasureThroughput(ctx, proxyURL, cfg.Timeout, *cfg.Throughput)
+		if err != nil {
+			allEvidence = append(allEvidence, Evidence{Test: "throughput", RawError: err.Error()})
+		} else {
+			result.Throughput = &tp
+		}
 	}
 
 	// Streaming unlocks
@@ -789,6 +812,67 @@ func WriteTable(w io.Writer, results []NodeResult) {
 		}
 	}
 	fmt.Fprintln(w)
+	writeThroughputTable(w, results)
+}
+
+// writeThroughputTable prints the multi-connection suite, when any node ran it.
+func writeThroughputTable(w io.Writer, results []NodeResult) {
+	any := false
+	for _, r := range results {
+		if r.Throughput != nil {
+			any = true
+			break
+		}
+	}
+	if !any {
+		return
+	}
+	fmt.Fprintf(w, "%-3s  %-30s  %-6s  %-8s  %-16s  %-16s  %-16s  %-16s\n",
+		"#", "Name", "Conns", "Idle", "Down avg/peak", "Down loaded", "Up avg/peak", "Up loaded")
+	fmt.Fprintf(w, "%s\n", strings.Repeat("-", 130))
+	for _, r := range results {
+		if r.Throughput == nil {
+			continue
+		}
+		name := r.Name
+		if len(name) > 28 {
+			name = name[:26] + ".."
+		}
+		t := r.Throughput
+		fmt.Fprintf(w, "%-3d  %-30s  %-6d  %-8s  %-16s  %-16s  %-16s  %-16s\n",
+			r.Index+1, name, t.Conns, msOrDash(t.IdleMs),
+			dirSpeed(t.Down), dirLoaded(t.Down), dirSpeed(t.Up), dirLoaded(t.Up))
+	}
+	fmt.Fprintln(w, "Mbit/s; loaded = median latency of a new request during that load (+ added over idle, loss %)")
+	fmt.Fprintln(w)
+}
+
+func msOrDash(ms float64) string {
+	if ms <= 0 {
+		return "-"
+	}
+	return strconv.FormatFloat(ms, 'f', 0, 64)
+}
+
+func dirSpeed(d *DirectionResult) string {
+	if d == nil {
+		return "-"
+	}
+	if d.Bytes == 0 {
+		return "fail"
+	}
+	return fmt.Sprintf("%.0f/%.0f", d.Mbps, d.PeakMbps)
+}
+
+func dirLoaded(d *DirectionResult) string {
+	if d == nil || d.LoadedMs <= 0 {
+		return "-"
+	}
+	s := fmt.Sprintf("%.0f(+%.0f)", d.LoadedMs, d.BloatMs)
+	if d.LoadedLossPct > 0 {
+		s += fmt.Sprintf(" L%.0f%%", d.LoadedLossPct)
+	}
+	return s
 }
 
 func WriteJSON(w io.Writer, results []NodeResult) {
@@ -804,7 +888,8 @@ func WriteCSV(w io.Writer, results []NodeResult) {
 	_ = cw.Write([]string{"index", "name", "type", "server", "port", "http_ms", "tcp_ms", "speed_mbps",
 		"netflix", "youtube", "disney+", "bilibili", "openai", "claude", "spotify", "tiktok", "wikipedia",
 		"ip_risk_score", "ip_risk_level", "dns_country", "ssh_22", "topology", "error",
-		"http_jitter_ms", "http_loss_pct"})
+		"http_jitter_ms", "http_loss_pct",
+		"idle_ms", "down_mbps", "down_peak_mbps", "down_loaded_ms", "up_mbps", "up_peak_mbps", "up_loaded_ms"})
 
 	for _, r := range results {
 		httpMs := ""
@@ -851,6 +936,17 @@ func WriteCSV(w io.Writer, results []NodeResult) {
 			loss = strconv.FormatFloat(r.Latency.HTTPLossPct, 'f', 1, 64)
 		}
 
+		idle, downMbps, downPeak, downLoaded, upMbps, upPeak, upLoaded := "", "", "", "", "", "", ""
+		if t := r.Throughput; t != nil {
+			idle = fmtCSV(t.IdleMs)
+			if t.Down != nil {
+				downMbps, downPeak, downLoaded = fmtCSV(t.Down.Mbps), fmtCSV(t.Down.PeakMbps), fmtCSV(t.Down.LoadedMs)
+			}
+			if t.Up != nil {
+				upMbps, upPeak, upLoaded = fmtCSV(t.Up.Mbps), fmtCSV(t.Up.PeakMbps), fmtCSV(t.Up.LoadedMs)
+			}
+		}
+
 		_ = cw.Write([]string{
 			strconv.Itoa(r.Index), r.Name, r.Type, r.Server, strconv.Itoa(r.Port),
 			httpMs, tcpMs, speed,
@@ -858,6 +954,9 @@ func WriteCSV(w io.Writer, results []NodeResult) {
 			unlockMap["bilibili"], unlockMap["openai"], unlockMap["claude"],
 			unlockMap["spotify"], unlockMap["tiktok"], unlockMap["wikipedia"],
 			ipScore, ipLevel, dns, ssh, topoStr, r.Error, jit, loss,
+			idle, downMbps, downPeak, downLoaded, upMbps, upPeak, upLoaded,
 		})
 	}
 }
+
+func fmtCSV(f float64) string { return strconv.FormatFloat(f, 'f', 1, 64) }
