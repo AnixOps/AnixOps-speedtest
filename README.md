@@ -36,6 +36,7 @@ speedtest -f config.yaml -format json -redact    # shareable report: IPs masked,
 speedtest -f config.yaml -format chart           # HTML report -> output/report.html
 speedtest -f config.yaml -jsonl -                # stream one JSON line per node as it finishes
 speedtest -f big.yaml -mihomo-batch 20 -c 10     # 20 nodes per mihomo process
+speedtest -f config.yaml -latency-only -throughput -c 1 # 8-connection down/up + loaded latency
 speedtest verify output/report.json --key-fingerprint <sha256-of-signer-pubkey>
 ```
 
@@ -62,12 +63,18 @@ reported immediately and skip the remaining checks.
 | `-latency-only` | false | Latency only (implies all `-skip-*` except latency) |
 | `-skip-latency/-speed/-unlock/-topo/-iprisk/-dns/-ssh` | false | Skip individual checks |
 | `-download-size` | `10485760` | Bytes for the speed test |
+| `-throughput` | false | Multi-connection download + upload with loaded latency (see below); runs even with `-latency-only` |
+| `-tp-conns`, `-tp-duration` | `8`, `8s` | Parallel connections and run time per direction |
+| `-tp-no-upload` | false | Download only |
+| `-tp-max-bytes` | `0` | Stop a direction after this many bytes (bounds traffic on production nodes) |
+| `-tp-down-url`, `-tp-up-url` | Cloudflare `__down?bytes=` / `__up` | Endpoints; a download URL ending in `=` gets the 25 MB chunk size appended |
 | `-unlock-rules` | – | YAML that overrides/extends the built-in unlock rules |
 | `-mihomo-batch` | `0` | Nodes per mihomo process (0 = one process per node); falls back per node if a batch fails to start |
 | `-redact` | false | Mask server/entry/exit IPs, drop raw evidence (applied *before* signing) |
 | `-jsonl` | – | Stream per-node results as JSON lines to a file (`-` = stdout) |
 | `-no-ats`, `-no-sign` | false | Disable OpenTimestamps anchoring / signatures |
 | `-pushgateway`, `-prom-job` | – / `speedtest` | Push latency metrics to a Prometheus Pushgateway (skips file output) |
+| `-prom-throughput-only` | false | Push only the `-throughput` series |
 | `-q`, `-version` | | Quiet; print version, commit and build date |
 
 A `speedtest.yaml` example:
@@ -90,7 +97,13 @@ skip-ssh: true
   With `-repeat > 1` the first TCP+TLS sample is also reported as **cold** (the first connection through a freshly
   started kernel, which pays the protocol's own handshake) and the median of the later ones as **warm** (they reuse the
   session the kernel keeps). Every HTTP sample follows a TCP+TLS one, so the HTTP latency is effectively warm.
-- **Speed** — download of `-download-size` bytes (Cloudflare, Hetzner fallback).
+- **Speed** — download of `-download-size` bytes (Cloudflare, Hetzner fallback), one connection.
+- **Throughput and loaded latency** (`-throughput`) — `-tp-conns` parallel connections download for `-tp-duration`, then upload
+  for the same time. Reports average and peak (best 1 s window) Mbit/s, the per-second curve, and — the part ordinary speed
+  tests skip — the latency of a fresh `generate_204` request every 0.5 s **during** each load (median, p90, loss) next to the
+  idle latency before it. `bloat` = loaded − idle is the queueing the load adds (bufferbloat, a node's send queue, a
+  multiplexed session's head-of-line blocking). Same shape as the anx lab WAN bench "speed" profile, so real-node numbers
+  compare directly with lab runs. Use `-c 1` so nodes don't compete for the tester's own bandwidth.
 - **Unlocks** — Netflix, YouTube Premium, Disney+, Bilibili, OpenAI, Claude, Spotify, TikTok, Wikipedia. Each verdict carries a
   `confidence` (`high|medium|low`). Rules live in [`internal/checker/rules.yaml`](internal/checker/rules.yaml) — edit or extend
   them via `-unlock-rules` without recompiling.
@@ -140,7 +153,10 @@ authenticate the author — use `verify` with a pinned key for that.
 ## Prometheus
 
 `-pushgateway URL` pushes `speedtest_node_up`, `speedtest_http_latency_ms`, `speedtest_tcp_latency_ms`, and (with `-repeat > 1`)
-`speedtest_http_jitter_ms`, `speedtest_http_loss_pct`, `speedtest_cold_ms`, `speedtest_tcp_warm_ms`. Every series carries `instance`, `node`, `server`, `type` and `kernel`
+`speedtest_http_jitter_ms`, `speedtest_http_loss_pct`, `speedtest_cold_ms`, `speedtest_tcp_warm_ms`; with `-throughput`
+`speedtest_idle_ms` and, for `down` and `up`, `speedtest_<dir>_mbps`, `_peak_mbps`, `_loaded_ms`, `_bloat_ms`, `_loaded_loss_pct`.
+Push a scheduled throughput run under its own `-prom-job` with `-prom-throughput-only`, so it neither replaces the frequent
+latency group nor leaves a second, stale copy of the latency and `node_up` series (it adds `speedtest_tp_timestamp`). Every series carries `instance`, `node`, `server`, `type` and `kernel`
 labels. `scripts/speedtest-cron.sh` wraps this for cron (set `SUB_URL` or pass a config; `KERNEL=anx ANX_BIN=...` for ANX).
 
 ## Layout

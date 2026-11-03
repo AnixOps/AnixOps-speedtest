@@ -20,9 +20,25 @@ import (
 // kernel labels every series with the proxy kernel that ran the test.
 // accessID/accessSecret are optional Cloudflare Access Service Token credentials.
 func PushMetrics(endpointURL, job, kernel string, results []probe.NodeResult, accessID, accessSecret string) error {
+	return push(endpointURL, job, kernel, results, accessID, accessSecret, false)
+}
+
+// PushThroughputMetrics pushes only the -throughput series (and
+// speedtest_tp_timestamp), so a daily throughput run under its own job does not
+// add a second, stale copy of the latency and node_up series that the frequent
+// latency run owns.
+func PushThroughputMetrics(endpointURL, job, kernel string, results []probe.NodeResult, accessID, accessSecret string) error {
+	return push(endpointURL, job, kernel, results, accessID, accessSecret, true)
+}
+
+func push(endpointURL, job, kernel string, results []probe.NodeResult, accessID, accessSecret string, throughputOnly bool) error {
 	var buf bytes.Buffer
 
 	instance := hostname()
+	if throughputOnly {
+		writeThroughputOnly(&buf, instance, kernel, results)
+		return send(endpointURL, job, &buf, accessID, accessSecret)
+	}
 
 	fmt.Fprintf(&buf, "# TYPE speedtest_http_latency_ms gauge\n")
 	fmt.Fprintf(&buf, "# TYPE speedtest_tcp_latency_ms gauge\n")
@@ -31,18 +47,15 @@ func PushMetrics(endpointURL, job, kernel string, results []probe.NodeResult, ac
 	fmt.Fprintf(&buf, "# TYPE speedtest_http_jitter_ms gauge\n")
 	fmt.Fprintf(&buf, "# TYPE speedtest_http_loss_pct gauge\n")
 	fmt.Fprintf(&buf, "# TYPE speedtest_node_up gauge\n")
+	for _, m := range throughputMetrics {
+		fmt.Fprintf(&buf, "# TYPE %s gauge\n", m)
+	}
 	fmt.Fprintf(&buf, "# TYPE speedtest_test_timestamp gauge\n")
 
 	now := float64(time.Now().Unix())
 
 	for _, r := range results {
-		labels := fmt.Sprintf(`{instance="%s",node="%s",server="%s",type="%s",kernel="%s"}`,
-			instance,
-			escapeLabel(r.Name),
-			escapeLabel(fmt.Sprintf("%s:%d", r.Server, r.Port)),
-			escapeLabel(r.Type),
-			escapeLabel(kernel),
-		)
+		labels := nodeLabels(instance, kernel, r)
 
 		buf.WriteString(fmt.Sprintf("speedtest_test_timestamp%s %.0f\n", labels, now))
 
@@ -72,10 +85,15 @@ func PushMetrics(endpointURL, job, kernel string, results []probe.NodeResult, ac
 				buf.WriteString(fmt.Sprintf("speedtest_tcp_warm_ms%s %s\n", labels, formatFloat(r.Latency.WarmTCPMs)))
 			}
 		}
+		writeThroughput(&buf, labels, r.Throughput)
 	}
 
+	return send(endpointURL, job, &buf, accessID, accessSecret)
+}
+
+func send(endpointURL, job string, buf *bytes.Buffer, accessID, accessSecret string) error {
 	url := buildPushURL(endpointURL, job)
-	req, err := http.NewRequest(http.MethodPost, url, &buf)
+	req, err := http.NewRequest(http.MethodPost, url, buf)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
@@ -129,4 +147,62 @@ func hostname() string {
 		h = "unknown"
 	}
 	return h
+}
+
+var throughputMetrics = []string{
+	"speedtest_idle_ms",
+	"speedtest_down_mbps", "speedtest_down_peak_mbps", "speedtest_down_loaded_ms", "speedtest_down_bloat_ms", "speedtest_down_loaded_loss_pct",
+	"speedtest_up_mbps", "speedtest_up_peak_mbps", "speedtest_up_loaded_ms", "speedtest_up_bloat_ms", "speedtest_up_loaded_loss_pct",
+}
+
+// writeThroughput emits the multi-connection suite; a direction that moved no
+// data reports 0 Mbit/s and no latency series.
+func writeThroughput(buf *bytes.Buffer, labels string, t *probe.ThroughputResult) {
+	if t == nil {
+		return
+	}
+	if t.IdleMs > 0 {
+		fmt.Fprintf(buf, "speedtest_idle_ms%s %s\n", labels, formatFloat(t.IdleMs))
+	}
+	for _, d := range []struct {
+		name string
+		r    *probe.DirectionResult
+	}{{"down", t.Down}, {"up", t.Up}} {
+		if d.r == nil {
+			continue
+		}
+		fmt.Fprintf(buf, "speedtest_%s_mbps%s %s\n", d.name, labels, formatFloat(d.r.Mbps))
+		fmt.Fprintf(buf, "speedtest_%s_peak_mbps%s %s\n", d.name, labels, formatFloat(d.r.PeakMbps))
+		if d.r.LoadedMs > 0 {
+			fmt.Fprintf(buf, "speedtest_%s_loaded_ms%s %s\n", d.name, labels, formatFloat(d.r.LoadedMs))
+			fmt.Fprintf(buf, "speedtest_%s_bloat_ms%s %s\n", d.name, labels, formatFloat(d.r.BloatMs))
+		}
+		fmt.Fprintf(buf, "speedtest_%s_loaded_loss_pct%s %s\n", d.name, labels, formatFloat(d.r.LoadedLossPct))
+	}
+}
+
+func nodeLabels(instance, kernel string, r probe.NodeResult) string {
+	return fmt.Sprintf(`{instance="%s",node="%s",server="%s",type="%s",kernel="%s"}`,
+		instance,
+		escapeLabel(r.Name),
+		escapeLabel(fmt.Sprintf("%s:%d", r.Server, r.Port)),
+		escapeLabel(r.Type),
+		escapeLabel(kernel),
+	)
+}
+
+func writeThroughputOnly(buf *bytes.Buffer, instance, kernel string, results []probe.NodeResult) {
+	fmt.Fprintf(buf, "# TYPE speedtest_tp_timestamp gauge\n")
+	for _, m := range throughputMetrics {
+		fmt.Fprintf(buf, "# TYPE %s gauge\n", m)
+	}
+	now := float64(time.Now().Unix())
+	for _, r := range results {
+		if r.Throughput == nil {
+			continue // dead node: the latency run reports it
+		}
+		labels := nodeLabels(instance, kernel, r)
+		fmt.Fprintf(buf, "speedtest_tp_timestamp%s %.0f\n", labels, now)
+		writeThroughput(buf, labels, r.Throughput)
+	}
 }

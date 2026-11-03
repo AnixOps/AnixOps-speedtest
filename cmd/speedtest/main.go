@@ -85,6 +85,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		unlockRules     string
 		mihomoBatch     int
 		anxBin          string
+		throughput      bool
+		tpConns         int
+		tpDuration      time.Duration
+		tpNoUpload      bool
+		tpMaxBytes      int64
+		tpDownURL       string
+		tpUpURL         string
+		promTPOnly      bool
 	)
 
 	fs.StringVar(&configFile, "f", "", "path to Clash YAML config file")
@@ -127,6 +135,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.IntVar(&mihomoBatch, "mihomo-batch", 0, "host up to N nodes per mihomo process (0 = one process per node)")
 	fs.StringVar(&unlockRules, "unlock-rules", "", "YAML file that overrides/extends the built-in unlock rules")
 	fs.StringVar(&configPath, "config", "", "YAML file of option defaults, keyed by flag name (default: ./speedtest.yaml if present)")
+
+	fs.BoolVar(&throughput, "throughput", false, "run the multi-connection download/upload suite with loaded latency")
+	fs.IntVar(&tpConns, "tp-conns", 8, "parallel connections per direction for -throughput")
+	fs.DurationVar(&tpDuration, "tp-duration", 8*time.Second, "how long each -throughput direction runs")
+	fs.BoolVar(&tpNoUpload, "tp-no-upload", false, "-throughput: download only")
+	fs.Int64Var(&tpMaxBytes, "tp-max-bytes", 0, "-throughput: stop a direction after this many bytes (0 = no cap)")
+	fs.StringVar(&tpDownURL, "tp-down-url", "", "-throughput download URL; a trailing '=' gets the chunk size (default Cloudflare __down)")
+	fs.BoolVar(&promTPOnly, "prom-throughput-only", false, "with -pushgateway: push only the -throughput series (for a separate throughput job)")
+	fs.StringVar(&tpUpURL, "tp-up-url", "", "-throughput upload URL accepting POST (default Cloudflare __up)")
 
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -277,6 +294,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 		SpeedTimeout:  speedTimeout,
 		UnlockTimeout: unlockTimeout,
 	}
+	if throughput {
+		cfg.Throughput = &probe.ThroughputConfig{
+			Conns:    tpConns,
+			Duration: tpDuration,
+			Upload:   !tpNoUpload,
+			MaxBytes: tpMaxBytes,
+			DownURL:  tpDownURL,
+			UpURL:    tpUpURL,
+		}
+	}
 	if jsonlPath != "" {
 		jw := stdout
 		if jsonlPath != "-" {
@@ -307,7 +334,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if pushgateway != "" {
 		cfAccessID := os.Getenv("CF_ACCESS_CLIENT_ID")
 		cfAccessSecret := os.Getenv("CF_ACCESS_CLIENT_SECRET")
-		if err := prom.PushMetrics(pushgateway, promJob, string(kernelMode), results, cfAccessID, cfAccessSecret); err != nil {
+		pushFn := prom.PushMetrics
+		if promTPOnly {
+			pushFn = prom.PushThroughputMetrics
+		}
+		if err := pushFn(pushgateway, promJob, string(kernelMode), results, cfAccessID, cfAccessSecret); err != nil {
 			logger.Printf("warning: failed to push metrics: %v", err)
 		} else {
 			logger.Printf("pushed metrics to Pushgateway %s (job=%s)", pushgateway, promJob)
