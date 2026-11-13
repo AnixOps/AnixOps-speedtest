@@ -185,11 +185,6 @@ func buildEntry(proxy clash.Proxy, name string) proxyEntry {
 		if proxy.Cipher != "" {
 			entry["cipher"] = proxy.Cipher
 		}
-		for k, v := range proxy.Extra {
-			if _, exists := entry[k]; !exists {
-				entry[k] = v
-			}
-		}
 	}
 
 	if proxy.Network != "" {
@@ -212,6 +207,17 @@ func buildEntry(proxy clash.Proxy, name string) proxyEntry {
 			entry["ws-opts"].(map[string]any)["headers"] = proxy.WSOpts.Headers
 		}
 	}
+	if proxy.GRPCOpts != nil {
+		entry["grpc-opts"] = map[string]any{
+			"grpc-service-name": proxy.GRPCOpts.ServiceName,
+		}
+	}
+	if proxy.H2Opts != nil {
+		entry["h2-opts"] = map[string]any{
+			"host": proxy.H2Opts.Host,
+			"path": proxy.H2Opts.Path,
+		}
+	}
 	if proxy.RealityOpts != nil && proxy.RealityOpts.PublicKey != "" {
 		entry["reality-opts"] = map[string]any{
 			"public-key": proxy.RealityOpts.PublicKey,
@@ -220,6 +226,24 @@ func buildEntry(proxy clash.Proxy, name string) proxyEntry {
 	}
 	if proxy.ClientFingerprint != "" {
 		entry["client-fingerprint"] = proxy.ClientFingerprint
+	}
+	if proxy.UDP {
+		entry["udp"] = true
+	}
+	if proxy.Plugin != "" {
+		entry["plugin"] = proxy.Plugin
+	}
+	if proxy.PluginOpts != nil {
+		entry["plugin-opts"] = proxy.PluginOpts
+	}
+	// The Clash parser stores protocol-agnostic fields (including ALPN) in
+	// Extra, even for known proxy types such as Trojan.  Forward these options
+	// without letting raw input override the normalized identity/credentials.
+	// This helper is shared by single-node and batched Mihomo execution.
+	for k, v := range proxy.Extra {
+		if _, exists := entry[k]; !exists {
+			entry[k] = v
+		}
 	}
 	return entry
 }
