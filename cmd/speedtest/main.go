@@ -93,6 +93,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		tpDownURL       string
 		tpUpURL         string
 		promTPOnly      bool
+		h3              bool
+		h3Target        string
 	)
 
 	fs.StringVar(&configFile, "f", "", "path to Clash YAML config file")
@@ -124,6 +126,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&pushgateway, "pushgateway", "", "Prometheus Pushgateway URL (e.g. http://host:9091)")
 	fs.StringVar(&promJob, "prom-job", "speedtest", "Prometheus job name for Pushgateway")
 
+	fs.BoolVar(&h3, "h3", false, "also probe HTTP/3 latency (QUIC through the node's UDP relay; -repeat samples)")
+	fs.StringVar(&h3Target, "h3-target", probe.DefaultH3Target, "https URL that answers HTTP/3, for -h3")
 	fs.IntVar(&repeat, "repeat", 1, "latency samples per node; >1 reports median, jitter and loss")
 	fs.BoolVar(&redact, "redact", false, "mask server/exit/entry IPs and drop raw evidence so the report is safe to share")
 
@@ -293,6 +297,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		Repeat:        repeat,
 		SpeedTimeout:  speedTimeout,
 		UnlockTimeout: unlockTimeout,
+		H3:            h3,
+		H3Target:      h3Target,
 	}
 	if throughput {
 		cfg.Throughput = &probe.ThroughputConfig{

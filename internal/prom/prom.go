@@ -47,6 +47,11 @@ func push(endpointURL, job, kernel string, results []probe.NodeResult, accessID,
 	fmt.Fprintf(&buf, "# TYPE speedtest_http_jitter_ms gauge\n")
 	fmt.Fprintf(&buf, "# TYPE speedtest_http_loss_pct gauge\n")
 	fmt.Fprintf(&buf, "# TYPE speedtest_node_up gauge\n")
+	fmt.Fprintf(&buf, "# TYPE speedtest_h3_up gauge\n")
+	fmt.Fprintf(&buf, "# TYPE speedtest_h3_latency_ms gauge\n")
+	fmt.Fprintf(&buf, "# TYPE speedtest_h3_handshake_ms gauge\n")
+	fmt.Fprintf(&buf, "# TYPE speedtest_h3_jitter_ms gauge\n")
+	fmt.Fprintf(&buf, "# TYPE speedtest_h3_loss_pct gauge\n")
 	for _, m := range throughputMetrics {
 		fmt.Fprintf(&buf, "# TYPE %s gauge\n", m)
 	}
@@ -85,10 +90,33 @@ func push(endpointURL, job, kernel string, results []probe.NodeResult, accessID,
 				buf.WriteString(fmt.Sprintf("speedtest_tcp_warm_ms%s %s\n", labels, formatFloat(r.Latency.WarmTCPMs)))
 			}
 		}
+		writeH3(&buf, labels, r.H3)
 		writeThroughput(&buf, labels, r.Throughput)
 	}
 
 	return send(endpointURL, job, &buf, accessID, accessSecret)
+}
+
+// writeH3 emits the HTTP/3 probe. A kernel without a UDP relay (Unsupported)
+// emits nothing, so "no UDP in this kernel" is not mistaken for "H3 down".
+func writeH3(buf *bytes.Buffer, labels string, h *probe.H3Result) {
+	if h == nil || h.Unsupported {
+		return
+	}
+	if !h.OK() {
+		fmt.Fprintf(buf, "speedtest_h3_up%s 0\n", labels)
+		fmt.Fprintf(buf, "speedtest_h3_loss_pct%s 100\n", labels)
+		return
+	}
+	fmt.Fprintf(buf, "speedtest_h3_up%s 1\n", labels)
+	fmt.Fprintf(buf, "speedtest_h3_latency_ms%s %s\n", labels, formatFloat(h.Ms))
+	if h.HandshakeMs > 0 {
+		fmt.Fprintf(buf, "speedtest_h3_handshake_ms%s %s\n", labels, formatFloat(h.HandshakeMs))
+	}
+	fmt.Fprintf(buf, "speedtest_h3_loss_pct%s %s\n", labels, formatFloat(h.LossPct))
+	if h.Samples > 1 {
+		fmt.Fprintf(buf, "speedtest_h3_jitter_ms%s %s\n", labels, formatFloat(h.JitterMs))
+	}
 }
 
 func send(endpointURL, job string, buf *bytes.Buffer, accessID, accessSecret string) error {
