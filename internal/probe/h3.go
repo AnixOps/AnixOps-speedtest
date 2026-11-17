@@ -126,7 +126,7 @@ func h3Once(ctx context.Context, proxyURL, target string, timeout time.Duration)
 	if err != nil {
 		return h3Sample{}, err
 	}
-	defer pc.Close()
+	defer func() { _ = pc.Close() }()
 
 	tlsConf := &tls.Config{
 		ServerName: u.Hostname(),
@@ -141,7 +141,7 @@ func h3Once(ctx context.Context, proxyURL, target string, timeout time.Duration)
 	if err != nil {
 		return h3Sample{}, fmt.Errorf("quic handshake: %w", err)
 	}
-	defer conn.CloseWithError(0, "")
+	defer func() { _ = conn.CloseWithError(0, "") }()
 	handshake := time.Since(started)
 
 	cc := (&http3.Transport{}).NewClientConn(conn)

@@ -60,7 +60,7 @@ func (s *Server) handle(c net.Conn) {
 	if _, err := io.CopyN(io.Discard, c, int64(hdr[1])); err != nil {
 		return
 	}
-	c.Write([]byte{5, 0})
+	_, _ = c.Write([]byte{5, 0})
 	req := make([]byte, 3)
 	if _, err := io.ReadFull(c, req); err != nil {
 		return
@@ -73,31 +73,31 @@ func (s *Server) handle(c net.Conn) {
 	case 1: // CONNECT
 		up, err := net.Dial("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
 		if err != nil {
-			c.Write([]byte{5, 5, 0, 1, 0, 0, 0, 0, 0, 0})
+			_, _ = c.Write([]byte{5, 5, 0, 1, 0, 0, 0, 0, 0, 0})
 			return
 		}
 		defer up.Close()
-		c.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0})
-		go io.Copy(up, c)
-		io.Copy(c, up)
+		_, _ = c.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0})
+		go func() { _, _ = io.Copy(up, c) }()
+		_, _ = io.Copy(c, up)
 	case 3: // UDP ASSOCIATE
 		if s.noUDP {
-			c.Write([]byte{5, 7, 0, 1, 0, 0, 0, 0, 0, 0})
+			_, _ = c.Write([]byte{5, 7, 0, 1, 0, 0, 0, 0, 0, 0})
 			return
 		}
 		relay, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 		if err != nil {
 			return
 		}
-		defer relay.Close()
+		defer func() { _ = relay.Close() }()
 		// Reply with 0.0.0.0 so the client has to substitute the proxy host.
 		rep := []byte{5, 0, 0, 1, 0, 0, 0, 0}
 		rep = binary.BigEndian.AppendUint16(rep, uint16(relay.LocalAddr().(*net.UDPAddr).Port))
-		c.Write(rep)
+		_, _ = c.Write(rep)
 		go s.relay(relay)
-		io.Copy(io.Discard, c) // association ends with the TCP connection
+		_, _ = io.Copy(io.Discard, c) // association ends with the TCP connection
 	default:
-		c.Write([]byte{5, 7, 0, 1, 0, 0, 0, 0, 0, 0})
+		_, _ = c.Write([]byte{5, 7, 0, 1, 0, 0, 0, 0, 0, 0})
 	}
 }
 
@@ -122,7 +122,7 @@ func (s *Server) relay(relay *net.UDPConn) {
 			if err != nil {
 				continue
 			}
-			relay.WriteToUDP(payload, dst)
+			_, _ = relay.WriteToUDP(payload, dst)
 			continue
 		}
 		// From the remote: wrap and send back to the client.
@@ -130,7 +130,7 @@ func (s *Server) relay(relay *net.UDPConn) {
 		out = append(out, from.IP.To4()...)
 		out = binary.BigEndian.AppendUint16(out, uint16(from.Port))
 		out = append(out, buf[:n]...)
-		relay.WriteToUDP(out, client)
+		_, _ = relay.WriteToUDP(out, client)
 	}
 }
 

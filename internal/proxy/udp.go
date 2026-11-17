@@ -93,23 +93,23 @@ func ListenUDP(ctx context.Context, proxyURL string, timeout time.Duration) (*UD
 	req = appendSocksAddr(req, local.LocalAddr().(*net.UDPAddr).IP, "", local.LocalAddr().(*net.UDPAddr).Port)
 	if _, err := ctrl.Write(req); err != nil {
 		ctrl.Close()
-		local.Close()
+		_ = local.Close()
 		return nil, fmt.Errorf("socks5 udp associate: %w", err)
 	}
 	head := make([]byte, 3)
 	if _, err := io.ReadFull(ctrl, head); err != nil {
 		ctrl.Close()
-		local.Close()
+		_ = local.Close()
 		return nil, fmt.Errorf("socks5 udp associate reply: %w", err)
 	}
 	if head[0] != 0x05 {
 		ctrl.Close()
-		local.Close()
+		_ = local.Close()
 		return nil, fmt.Errorf("unexpected socks version %d", head[0])
 	}
 	if head[1] != 0x00 {
 		ctrl.Close()
-		local.Close()
+		_ = local.Close()
 		if head[1] == 0x07 {
 			return nil, ErrUDPUnsupported
 		}
@@ -118,7 +118,7 @@ func ListenUDP(ctx context.Context, proxyURL string, timeout time.Duration) (*UD
 	bindHost, bindPort, err := readSocksAddr(ctrl)
 	if err != nil {
 		ctrl.Close()
-		local.Close()
+		_ = local.Close()
 		return nil, fmt.Errorf("read socks5 relay address: %w", err)
 	}
 	_ = ctrl.SetDeadline(time.Time{})
