@@ -129,6 +129,10 @@ func MeasureThroughput(ctx context.Context, proxyURL string, timeout time.Durati
 	loadClient.Timeout = 0
 
 	res := ThroughputResult{Conns: cfg.Conns}
+	// One discarded probe first: the first request through a fresh kernel pays
+	// the protocol's cold handshake, which would inflate the idle baseline and
+	// make the loaded-minus-idle bloat come out negative.
+	_, _ = probeOnce(ctx, probeClient, cfg.ProbeURL)
 	var idle sampleSet
 	for i := 0; i < cfg.IdleSamples; i++ {
 		ms, ok := probeOnce(ctx, probeClient, cfg.ProbeURL)

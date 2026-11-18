@@ -130,3 +130,40 @@ func TestPushThroughputMetricsOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestPushMetricsH3(t *testing.T) {
+	var body string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		body = string(b)
+	}))
+	defer srv.Close()
+
+	lat := &probe.LatencyResult{HTTPMs: 30, TCPMs: 20}
+	results := []probe.NodeResult{
+		{Name: "ok", Type: "vless", Server: "a", Port: 443, Latency: lat,
+			H3: &probe.H3Result{Ms: 25, HandshakeMs: 18, Samples: 3, JitterMs: 2, LossPct: 0}},
+		{Name: "blocked", Type: "vless", Server: "b", Port: 443, Latency: lat,
+			H3: &probe.H3Result{Samples: 3, LossPct: 100, Error: "timeout"}},
+		{Name: "noudp", Type: "anx", Server: "c", Port: 443, Latency: lat,
+			H3: &probe.H3Result{Unsupported: true}},
+	}
+	if err := PushMetrics(srv.URL, "speedtest", "mihomo", results, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`speedtest_h3_up{instance=`, `speedtest_h3_latency_ms{`, `speedtest_h3_handshake_ms{`, `speedtest_h3_jitter_ms{`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %q:\n%s", want, body)
+		}
+	}
+	for _, line := range strings.Split(body, "\n") {
+		if strings.Contains(line, `node="noudp"`) && strings.HasPrefix(line, "speedtest_h3_") {
+			t.Errorf("kernel without UDP must not emit h3 metrics: %s", line)
+		}
+		if strings.Contains(line, `node="blocked"`) && strings.HasPrefix(line, "speedtest_h3_up") && !strings.HasSuffix(line, " 0") {
+			t.Errorf("blocked node should be h3_up 0: %s", line)
+		}
+	}
+}

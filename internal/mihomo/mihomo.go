@@ -123,6 +123,7 @@ type listenerEntry struct {
 	Port   int    `yaml:"port"`
 	Listen string `yaml:"listen"`
 	Proxy  string `yaml:"proxy"`
+	UDP    bool   `yaml:"udp"`
 }
 
 type proxyGroup struct {
@@ -155,6 +156,9 @@ func buildEntry(proxy clash.Proxy, name string) proxyEntry {
 	entry["type"] = mihomoType(proxy.Type)
 	entry["server"] = proxy.Server
 	entry["port"] = proxy.Port
+	// mihomo defaults udp to false for vmess/vless/trojan/ss; the HTTP/3 probe
+	// needs the node's UDP carriage, and TCP checks are unaffected.
+	entry["udp"] = true
 
 	switch strings.ToLower(proxy.Type) {
 	case "vmess":
@@ -455,7 +459,7 @@ func buildBatchConfig(proxies []clash.Proxy, ports []int) ([]byte, error) {
 		name := fmt.Sprintf("n%d", i)
 		cfg.Proxies = append(cfg.Proxies, buildEntry(p, name))
 		cfg.Listeners = append(cfg.Listeners, listenerEntry{
-			Name: "l" + name, Type: "socks", Port: ports[i], Listen: "127.0.0.1", Proxy: name,
+			Name: "l" + name, Type: "socks", Port: ports[i], Listen: "127.0.0.1", Proxy: name, UDP: true,
 		})
 	}
 	return yaml.Marshal(cfg)

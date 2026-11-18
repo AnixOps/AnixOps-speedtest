@@ -32,6 +32,7 @@ digest is refused unless you set `SPEEDTEST_ALLOW_UNVERIFIED_KERNEL=1`.
 speedtest -f config.yaml                         # table to stdout
 speedtest -sub "https://example/sub?token=..."   # v2ray/Clash subscription
 speedtest -f config.yaml -latency-only -repeat 5 # median / jitter / loss over 5 samples
+speedtest -f config.yaml -latency-only -h3 -repeat 3 # + HTTP/3 (QUIC over the node's UDP) latency
 speedtest -f config.yaml -format json -redact    # shareable report: IPs masked, raw evidence dropped
 speedtest -f config.yaml -format chart           # HTML report -> output/report.html
 speedtest -f config.yaml -jsonl -                # stream one JSON line per node as it finishes
@@ -59,6 +60,8 @@ reported immediately and skip the remaining checks.
 | `-timeout` | `10s` | Per-probe timeout |
 | `-speed-timeout`, `-unlock-timeout` | 3×`-timeout`, `-timeout` | Per-phase overrides |
 | `-repeat` | `1` | Latency samples per node; >1 reports median, jitter, loss |
+| `-h3` | false | Also probe HTTP/3 latency through the node's UDP relay (`-repeat` samples) |
+| `-h3-target` | `https://www.gstatic.com/generate_204` | https URL that answers HTTP/3, for `-h3` |
 | `-filter` | – | Only test nodes whose name contains this |
 | `-latency-only` | false | Latency only (implies all `-skip-*` except latency) |
 | `-skip-latency/-speed/-unlock/-topo/-iprisk/-dns/-ssh` | false | Skip individual checks |
@@ -97,6 +100,12 @@ skip-ssh: true
   With `-repeat > 1` the first TCP+TLS sample is also reported as **cold** (the first connection through a freshly
   started kernel, which pays the protocol's own handshake) and the median of the later ones as **warm** (they reuse the
   session the kernel keeps). Every HTTP sample follows a TCP+TLS one, so the HTTP latency is effectively warm.
+- **HTTP/3 latency** (`-h3`) — each sample opens a fresh QUIC connection to `-h3-target` through the node, using the local
+  kernel's SOCKS5 UDP ASSOCIATE (the hostname goes to the node unresolved), then sends one GET. Reports the median of
+  handshake + request (comparable to the HTTP latency of the same URL, which pays a fresh TCP+TLS), the QUIC handshake alone,
+  jitter and loss. This exercises the node's UDP carriage, which the TCP probes never touch: a node whose protocol, server
+  config or provider drops UDP shows 100 % H3 loss while its HTTP latency looks fine. A kernel with no UDP relay at all (the
+  current `anx-proxy`) is reported as unsupported, not as a failure. mihomo nodes are configured with `udp: true` for this.
 - **Speed** — download of `-download-size` bytes (Cloudflare, Hetzner fallback), one connection.
 - **Throughput and loaded latency** (`-throughput`) — `-tp-conns` parallel connections download for `-tp-duration`, then upload
   for the same time. Reports average and peak (best 1 s window) Mbit/s, the per-second curve, and — the part ordinary speed
@@ -153,7 +162,9 @@ authenticate the author — use `verify` with a pinned key for that.
 ## Prometheus
 
 `-pushgateway URL` pushes `speedtest_node_up`, `speedtest_http_latency_ms`, `speedtest_tcp_latency_ms`, and (with `-repeat > 1`)
-`speedtest_http_jitter_ms`, `speedtest_http_loss_pct`, `speedtest_cold_ms`, `speedtest_tcp_warm_ms`; with `-throughput`
+`speedtest_http_jitter_ms`, `speedtest_http_loss_pct`, `speedtest_cold_ms`, `speedtest_tcp_warm_ms`; with `-h3`
+`speedtest_h3_up` (0/1), `speedtest_h3_latency_ms`, `speedtest_h3_handshake_ms`, `speedtest_h3_loss_pct`,
+`speedtest_h3_jitter_ms` (no H3 series when the kernel has no UDP relay); with `-throughput`
 `speedtest_idle_ms` and, for `down` and `up`, `speedtest_<dir>_mbps`, `_peak_mbps`, `_loaded_ms`, `_bloat_ms`, `_loaded_loss_pct`.
 Push a scheduled throughput run under its own `-prom-job` with `-prom-throughput-only`, so it neither replaces the frequent
 latency group nor leaves a second, stale copy of the latency and `node_up` series (it adds `speedtest_tp_timestamp`). Every series carries `instance`, `node`, `server`, `type` and `kernel`

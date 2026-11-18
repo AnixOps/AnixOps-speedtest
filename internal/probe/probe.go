@@ -65,6 +65,10 @@ type Config struct {
 	// Throughput, when non-nil, runs the multi-connection download/upload suite
 	// with loaded latency (see ThroughputConfig).
 	Throughput *ThroughputConfig
+	// H3, when true, runs the HTTP/3 latency probe (Repeat samples) against
+	// H3Target (empty = DefaultH3Target). Needs a kernel with a SOCKS5 UDP relay.
+	H3       bool
+	H3Target string
 	// OnResult, when set, receives each node's result as soon as it finishes.
 	// Calls are serialized.
 	OnResult func(NodeResult)
@@ -78,6 +82,8 @@ type NodeResult struct {
 	Port    int            `json:"port"`
 	Latency *LatencyResult `json:"latency,omitempty"`
 	Speed   *SpeedResult   `json:"speed,omitempty"`
+	// H3 is the HTTP/3 (QUIC) latency probe.
+	H3 *H3Result `json:"h3,omitempty"`
 	// Throughput is the multi-connection suite (download, upload, loaded latency).
 	Throughput *ThroughputResult        `json:"throughput,omitempty"`
 	Unlocks    []checker.UnlockStatus   `json:"unlocks,omitempty"`
@@ -430,6 +436,13 @@ func testNodeVia(ctx context.Context, idx int, p clash.Proxy, cfg Config, proxyU
 			result.Evidence = allEvidence
 			return result
 		}
+	}
+
+	// HTTP/3 latency (QUIC over the node's UDP carriage)
+	if cfg.H3 {
+		h3, ev := MeasureH3(ctx, proxyURL, cfg.H3Target, cfg.Timeout, cfg.Repeat)
+		result.H3 = &h3
+		allEvidence = append(allEvidence, ev...)
 	}
 
 	// Speed
@@ -812,6 +825,7 @@ func WriteTable(w io.Writer, results []NodeResult) {
 		}
 	}
 	fmt.Fprintln(w)
+	writeH3Table(w, results)
 	writeThroughputTable(w, results)
 }
 
@@ -868,7 +882,7 @@ func dirLoaded(d *DirectionResult) string {
 	if d == nil || d.LoadedMs <= 0 {
 		return "-"
 	}
-	s := fmt.Sprintf("%.0f(+%.0f)", d.LoadedMs, d.BloatMs)
+	s := fmt.Sprintf("%.0f(%+.0f)", d.LoadedMs, d.BloatMs)
 	if d.LoadedLossPct > 0 {
 		s += fmt.Sprintf(" L%.0f%%", d.LoadedLossPct)
 	}
@@ -889,7 +903,8 @@ func WriteCSV(w io.Writer, results []NodeResult) {
 		"netflix", "youtube", "disney+", "bilibili", "openai", "claude", "spotify", "tiktok", "wikipedia",
 		"ip_risk_score", "ip_risk_level", "dns_country", "ssh_22", "topology", "error",
 		"http_jitter_ms", "http_loss_pct",
-		"idle_ms", "down_mbps", "down_peak_mbps", "down_loaded_ms", "up_mbps", "up_peak_mbps", "up_loaded_ms"})
+		"idle_ms", "down_mbps", "down_peak_mbps", "down_loaded_ms", "up_mbps", "up_peak_mbps", "up_loaded_ms",
+		"h3_ms", "h3_handshake_ms", "h3_loss_pct"})
 
 	for _, r := range results {
 		httpMs := ""
@@ -947,6 +962,8 @@ func WriteCSV(w io.Writer, results []NodeResult) {
 			}
 		}
 
+		h3Ms, h3HS, h3Loss := h3CSV(r.H3)
+
 		_ = cw.Write([]string{
 			strconv.Itoa(r.Index), r.Name, r.Type, r.Server, strconv.Itoa(r.Port),
 			httpMs, tcpMs, speed,
@@ -955,8 +972,67 @@ func WriteCSV(w io.Writer, results []NodeResult) {
 			unlockMap["spotify"], unlockMap["tiktok"], unlockMap["wikipedia"],
 			ipScore, ipLevel, dns, ssh, topoStr, r.Error, jit, loss,
 			idle, downMbps, downPeak, downLoaded, upMbps, upPeak, upLoaded,
+			h3Ms, h3HS, h3Loss,
 		})
 	}
 }
 
 func fmtCSV(f float64) string { return strconv.FormatFloat(f, 'f', 1, 64) }
+
+// h3CSV renders the H3 columns; all empty when the probe did not run or the
+// kernel has no UDP relay.
+func h3CSV(h *H3Result) (string, string, string) {
+	if h == nil || h.Unsupported {
+		return "", "", ""
+	}
+	if !h.OK() {
+		return "", "", "100.0"
+	}
+	return fmtCSV(h.Ms), fmtCSV(h.HandshakeMs), fmtCSV(h.LossPct)
+}
+
+// writeH3Table prints the HTTP/3 probe next to the HTTP/1.1 one, when any node
+// ran it.
+func writeH3Table(w io.Writer, results []NodeResult) {
+	any := false
+	for _, r := range results {
+		if r.H3 != nil {
+			any = true
+			break
+		}
+	}
+	if !any {
+		return
+	}
+	fmt.Fprintf(w, "%-3s  %-30s  %-10s  %-10s  %-12s  %-8s  %s\n",
+		"#", "Name", "HTTP(ms)", "H3(ms)", "QUIC hs(ms)", "H3 loss", "Note")
+	fmt.Fprintf(w, "%s\n", strings.Repeat("-", 100))
+	for _, r := range results {
+		if r.H3 == nil {
+			continue
+		}
+		name := r.Name
+		if len(name) > 28 {
+			name = name[:26] + ".."
+		}
+		httpMs := "-"
+		if r.Latency != nil {
+			httpMs = msOrDash(r.Latency.HTTPMs)
+		}
+		h := r.H3
+		h3Ms, hs, loss, note := msOrDash(h.Ms), msOrDash(h.HandshakeMs), fmt.Sprintf("%.0f%%", h.LossPct), ""
+		switch {
+		case h.Unsupported:
+			h3Ms, hs, loss, note = "-", "-", "-", "kernel has no UDP relay"
+		case !h.OK():
+			loss, note = "100%", h.Error
+		}
+		if len(note) > 60 {
+			note = note[:58] + ".."
+		}
+		fmt.Fprintf(w, "%-3d  %-30s  %-10s  %-10s  %-12s  %-8s  %s\n",
+			r.Index+1, name, httpMs, h3Ms, hs, loss, note)
+	}
+	fmt.Fprintln(w, "H3 = fresh QUIC handshake + one GET through the node (UDP); HTTP = fresh TCP+TLS + one GET")
+	fmt.Fprintln(w)
+}

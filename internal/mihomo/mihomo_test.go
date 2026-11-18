@@ -84,3 +84,21 @@ func TestBuildConfigShadowsocksTypeName(t *testing.T) {
 		}
 	}
 }
+
+func TestBatchConfigEnablesUDP(t *testing.T) {
+	p := clash.Proxy{Name: "v", Type: "vless", Server: "v.com", Port: 443, UUID: "u"}
+	out, err := buildBatchConfig([]clash.Proxy{p}, []int{7000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		Proxies   []map[string]any `yaml:"proxies"`
+		Listeners []map[string]any `yaml:"listeners"`
+	}
+	if err := yaml.Unmarshal(out, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Proxies[0]["udp"] != true || cfg.Listeners[0]["udp"] != true {
+		t.Fatalf("udp not enabled (needed by -h3): proxy=%v listener=%v", cfg.Proxies[0], cfg.Listeners[0])
+	}
+}
