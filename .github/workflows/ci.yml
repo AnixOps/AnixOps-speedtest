@@ -17,6 +17,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      # Neutral terminology (AnixOps-design guidelines/terminology.md); byte-identical copies of the baseline.
+      - name: Neutral terminology
+        run: python3 .github/scripts/neutral_terms.py
       - name: gofmt
         run: |
           out="$(gofmt -l .)"

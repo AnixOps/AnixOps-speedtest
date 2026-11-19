@@ -2,7 +2,7 @@
 
 CLI for batch-testing proxy node quality from a Mihomo/Clash config or a subscription URL. It starts a
 local proxy kernel per node (or per batch), routes every probe through it, and reports latency, speed,
-service unlocks and exit-IP reputation — with signed, tamper-evident reports.
+service availability and exit-IP reputation — with signed, tamper-evident reports.
 
 Default kernel: [mihomo](https://github.com/MetaCubeX/mihomo). [xray-core](https://github.com/XTLS/Xray-core) is supported for VMess/VLESS/Trojan/Shadowsocks.
 `-kernel anx` runs every node through an external `anx-proxy` (the AnixOps Net client engine, including ANX `anx://` nodes); see [ANX kernel](#anx-kernel).
@@ -58,20 +58,20 @@ reported immediately and skip the remaining checks.
 | `-o`, `-output-dir`, `-bin-dir`, `-key-dir` | – / `output` / `bin` / `.keys` | Paths |
 | `-c` | `5` | Concurrent workers |
 | `-timeout` | `10s` | Per-probe timeout |
-| `-speed-timeout`, `-unlock-timeout` | 3×`-timeout`, `-timeout` | Per-phase overrides |
+| `-speed-timeout`, `-availability-timeout` | 3×`-timeout`, `-timeout` | Per-phase overrides |
 | `-repeat` | `1` | Latency samples per node; >1 reports median, jitter, loss |
 | `-h3` | false | Also probe HTTP/3 latency through the node's UDP relay (`-repeat` samples) |
 | `-h3-target` | `https://www.gstatic.com/generate_204` | https URL that answers HTTP/3, for `-h3` |
 | `-filter` | – | Only test nodes whose name contains this |
 | `-latency-only` | false | Latency only (implies all `-skip-*` except latency) |
-| `-skip-latency/-speed/-unlock/-topo/-iprisk/-dns/-ssh` | false | Skip individual checks |
+| `-skip-latency/-speed/-availability/-topo/-iprisk/-dns/-ssh` | false | Skip individual checks |
 | `-download-size` | `10485760` | Bytes for the speed test |
 | `-throughput` | false | Multi-connection download + upload with loaded latency (see below); runs even with `-latency-only` |
 | `-tp-conns`, `-tp-duration` | `8`, `8s` | Parallel connections and run time per direction |
 | `-tp-no-upload` | false | Download only |
 | `-tp-max-bytes` | `0` | Stop a direction after this many bytes (bounds traffic on production nodes) |
 | `-tp-down-url`, `-tp-up-url` | Cloudflare `__down?bytes=` / `__up` | Endpoints; a download URL ending in `=` gets the 25 MB chunk size appended |
-| `-unlock-rules` | – | YAML that overrides/extends the built-in unlock rules |
+| `-availability-rules` | – | YAML that overrides/extends the built-in service availability rules |
 | `-mihomo-batch` | `0` | Nodes per mihomo process (0 = one process per node); falls back per node if a batch fails to start |
 | `-redact` | false | Mask server/entry/exit IPs, drop raw evidence (applied *before* signing) |
 | `-jsonl` | – | Stream per-node results as JSON lines to a file (`-` = stdout) |
@@ -79,6 +79,9 @@ reported immediately and skip the remaining checks.
 | `-pushgateway`, `-prom-job` | – / `speedtest` | Push latency metrics to a Prometheus Pushgateway (skips file output) |
 | `-prom-throughput-only` | false | Push only the `-throughput` series |
 | `-q`, `-version` | | Quiet; print version, commit and build date |
+
+The service availability options were renamed; the old flag names still work and print nothing extra. The JSON
+report field is now `availability` (it was `unlocks`). <!-- neutral-terms: allow (old field name, for readers of older reports) -->
 
 A `speedtest.yaml` example:
 
@@ -113,9 +116,9 @@ skip-ssh: true
   idle latency before it. `bloat` = loaded − idle is the queueing the load adds (bufferbloat, a node's send queue, a
   multiplexed session's head-of-line blocking). Same shape as the anx lab WAN bench "speed" profile, so real-node numbers
   compare directly with lab runs. Use `-c 1` so nodes don't compete for the tester's own bandwidth.
-- **Unlocks** — Netflix, YouTube Premium, Disney+, Bilibili, OpenAI, Claude, Spotify, TikTok, Wikipedia. Each verdict carries a
+- **Service availability** — Netflix, YouTube Premium, Disney+, Bilibili, OpenAI, Claude, Spotify, TikTok, Wikipedia. Each verdict carries a
   `confidence` (`high|medium|low`). Rules live in [`internal/checker/rules.yaml`](internal/checker/rules.yaml) — edit or extend
-  them via `-unlock-rules` without recompiling.
+  them via `-availability-rules` without recompiling.
 - **IP risk** — exit IP via ipinfo.io, reputation via proxycheck.io (HTTPS), ipapi.is as backup. Results are cached per exit IP.
   The plain-HTTP ip-api.com provider is **off** unless `SPEEDTEST_ALLOW_HTTP_GEOIP=1` (its answers can be forged on the path).
   If no reputation provider answers, the level is a coarse `medium` guess.
@@ -178,7 +181,7 @@ internal/kernel    shared kernel download+SHA-256 verification, process supervis
 internal/mihomo    mihomo launcher (single node or batch)     internal/xray   xray launcher
 internal/anx       external anx-proxy launcher (per node, from the share link)
 internal/probe     orchestration, latency/speed, redaction, table/CSV
-internal/checker   unlock rules engine, IP reputation, DNS, SSH
+internal/checker   availability rules engine, IP reputation, DNS, SSH
 internal/ats       certificate, signing (Ed25519 + ML-DSA), verification, OTS, QR
 internal/chart     HTML / PNG reports        internal/sub, internal/clash   input parsing
 internal/prom      Pushgateway               internal/topo                  entry/exit analysis

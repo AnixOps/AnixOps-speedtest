@@ -48,53 +48,53 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 
 	var (
-		configFile      string
-		subscriptionURL string
-		subUserAgent    string
-		subCache        string
-		outputFormat    string
-		outputFile      string
-		outputDir       string
-		binDir          string
-		keyDir          string
-		kernel          string
-		timeout         time.Duration
-		concurrency     int
-		skipLatency     bool
-		skipSpeed       bool
-		skipUnlock      bool
-		skipTopo        bool
-		skipIPRisk      bool
-		skipDNS         bool
-		skipSSH         bool
-		showVersion     bool
-		proxyFilter     string
-		downloadSize    int64
-		disableATS      bool
-		noSign          bool
-		latencyOnly     bool
-		pushgateway     string
-		promJob         string
-		repeat          int
-		redact          bool
-		speedTimeout    time.Duration
-		unlockTimeout   time.Duration
-		jsonlPath       string
-		quiet           bool
-		configPath      string
-		unlockRules     string
-		mihomoBatch     int
-		anxBin          string
-		throughput      bool
-		tpConns         int
-		tpDuration      time.Duration
-		tpNoUpload      bool
-		tpMaxBytes      int64
-		tpDownURL       string
-		tpUpURL         string
-		promTPOnly      bool
-		h3              bool
-		h3Target        string
+		configFile          string
+		subscriptionURL     string
+		subUserAgent        string
+		subCache            string
+		outputFormat        string
+		outputFile          string
+		outputDir           string
+		binDir              string
+		keyDir              string
+		kernel              string
+		timeout             time.Duration
+		concurrency         int
+		skipLatency         bool
+		skipSpeed           bool
+		skipAvailability    bool
+		skipTopo            bool
+		skipIPRisk          bool
+		skipDNS             bool
+		skipSSH             bool
+		showVersion         bool
+		proxyFilter         string
+		downloadSize        int64
+		disableATS          bool
+		noSign              bool
+		latencyOnly         bool
+		pushgateway         string
+		promJob             string
+		repeat              int
+		redact              bool
+		speedTimeout        time.Duration
+		availabilityTimeout time.Duration
+		jsonlPath           string
+		quiet               bool
+		configPath          string
+		availabilityRules   string
+		mihomoBatch         int
+		anxBin              string
+		throughput          bool
+		tpConns             int
+		tpDuration          time.Duration
+		tpNoUpload          bool
+		tpMaxBytes          int64
+		tpDownURL           string
+		tpUpURL             string
+		promTPOnly          bool
+		h3                  bool
+		h3Target            string
 	)
 
 	fs.StringVar(&configFile, "f", "", "path to Clash YAML config file")
@@ -112,7 +112,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.IntVar(&concurrency, "c", 5, "concurrent test workers")
 	fs.BoolVar(&skipLatency, "skip-latency", false, "skip HTTP latency test")
 	fs.BoolVar(&skipSpeed, "skip-speed", false, "skip download speed test")
-	fs.BoolVar(&skipUnlock, "skip-unlock", false, "skip streaming unlock tests")
+	fs.BoolVar(&skipAvailability, "skip-availability", false, "skip service availability checks")
+	fs.BoolVar(&skipAvailability, "skip-unlock", false, "deprecated: use -skip-availability") // neutral-terms: allow (deprecated alias kept for existing scripts and -config files)
 	fs.BoolVar(&skipTopo, "skip-topo", false, "skip topology analysis")
 	fs.BoolVar(&skipIPRisk, "skip-iprisk", false, "skip IP risk check")
 	fs.BoolVar(&skipDNS, "skip-dns", false, "skip DNS region detection")
@@ -132,12 +133,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.BoolVar(&redact, "redact", false, "mask server/exit/entry IPs and drop raw evidence so the report is safe to share")
 
 	fs.DurationVar(&speedTimeout, "speed-timeout", 0, "download-test timeout (default: 3x -timeout)")
-	fs.DurationVar(&unlockTimeout, "unlock-timeout", 0, "per-service unlock-check timeout (default: -timeout)")
+	fs.DurationVar(&availabilityTimeout, "availability-timeout", 0, "per-service availability-check timeout (default: -timeout)")
+	fs.DurationVar(&availabilityTimeout, "unlock-timeout", 0, "deprecated: use -availability-timeout") // neutral-terms: allow (deprecated alias kept for existing scripts and -config files)
 	fs.StringVar(&jsonlPath, "jsonl", "", "stream each node's result as a JSON line to this file as it completes (- for stdout)")
 	fs.BoolVar(&quiet, "q", false, "suppress progress logging")
 
 	fs.IntVar(&mihomoBatch, "mihomo-batch", 0, "host up to N nodes per mihomo process (0 = one process per node)")
-	fs.StringVar(&unlockRules, "unlock-rules", "", "YAML file that overrides/extends the built-in unlock rules")
+	fs.StringVar(&availabilityRules, "availability-rules", "", "YAML file that overrides/extends the built-in service availability rules")
+	fs.StringVar(&availabilityRules, "unlock-rules", "", "deprecated: use -availability-rules") // neutral-terms: allow (deprecated alias kept for existing scripts and -config files)
 	fs.StringVar(&configPath, "config", "", "YAML file of option defaults, keyed by flag name (default: ./speedtest.yaml if present)")
 
 	fs.BoolVar(&throughput, "throughput", false, "run the multi-connection download/upload suite with loaded latency")
@@ -266,39 +269,39 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	if latencyOnly {
 		skipSpeed = true
-		skipUnlock = true
+		skipAvailability = true
 		skipTopo = true
 		skipIPRisk = true
 		skipDNS = true
 		skipSSH = true
 	}
 
-	rules, err := checker.LoadRules(unlockRules)
+	rules, err := checker.LoadRules(availabilityRules)
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return 2
 	}
 
 	cfg := probe.Config{
-		UnlockRules:   rules,
-		MihomoBatch:   mihomoBatch,
-		Kernel:        kernelMode,
-		AnxBin:        anxBin,
-		Timeout:       timeout,
-		DownloadSize:  downloadSize,
-		SkipLatency:   skipLatency,
-		SkipSpeed:     skipSpeed,
-		SkipUnlock:    skipUnlock,
-		SkipTopo:      skipTopo,
-		SkipIPRisk:    skipIPRisk,
-		SkipDNS:       skipDNS,
-		SkipSSH:       skipSSH,
-		BinDir:        binDir,
-		Repeat:        repeat,
-		SpeedTimeout:  speedTimeout,
-		UnlockTimeout: unlockTimeout,
-		H3:            h3,
-		H3Target:      h3Target,
+		AvailabilityRules:   rules,
+		MihomoBatch:         mihomoBatch,
+		Kernel:              kernelMode,
+		AnxBin:              anxBin,
+		Timeout:             timeout,
+		DownloadSize:        downloadSize,
+		SkipLatency:         skipLatency,
+		SkipSpeed:           skipSpeed,
+		SkipAvailability:    skipAvailability,
+		SkipTopo:            skipTopo,
+		SkipIPRisk:          skipIPRisk,
+		SkipDNS:             skipDNS,
+		SkipSSH:             skipSSH,
+		BinDir:              binDir,
+		Repeat:              repeat,
+		SpeedTimeout:        speedTimeout,
+		AvailabilityTimeout: availabilityTimeout,
+		H3:                  h3,
+		H3Target:            h3Target,
 	}
 	if throughput {
 		cfg.Throughput = &probe.ThroughputConfig{

@@ -1,4 +1,4 @@
-# Built-in streaming/service unlock rules. Override or extend with -unlock-rules <file>:
+# Built-in service availability rules. Override or extend with -availability-rules <file>:
 # a rule in your file replaces a built-in rule with the same `service` name; new names are appended.
 #
 # A rule fetches `url`, then evaluates `steps` in order; the first step whose `when`
