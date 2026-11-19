@@ -1,5 +1,5 @@
 ---
-name: Unlock rule request/fix
+name: Availability rule request/fix
 about: A service check is wrong or missing
 ---
 

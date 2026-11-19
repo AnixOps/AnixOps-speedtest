@@ -33,7 +33,7 @@ func RenderDenseTable(w io.Writer, results []probe.NodeResult, cert *ats.ATSCert
 	// Collect all unique streaming service names for columns
 	serviceSet := map[string]struct{}{}
 	for _, r := range results {
-		for _, u := range r.Unlocks {
+		for _, u := range r.Availability {
 			serviceSet[u.Service] = struct{}{}
 		}
 	}
@@ -236,16 +236,16 @@ func RenderDenseTable(w io.Writer, results []probe.NodeResult, cert *ats.ATSCert
 		}
 		fmt.Fprintf(w, `<td class="%s">%s</td>`, speedCellClass, maxSpeedStr)
 
-		// Streaming unlocks
-		unlockMap := map[string]*checker.UnlockStatus{}
-		for i := range r.Unlocks {
-			u := &r.Unlocks[i]
-			unlockMap[u.Service] = u
+		// Service availability
+		availMap := map[string]*checker.AvailabilityStatus{}
+		for i := range r.Availability {
+			u := &r.Availability[i]
+			availMap[u.Service] = u
 		}
 		for _, svc := range services {
-			u := unlockMap[svc]
+			u := availMap[svc]
 			if u != nil {
-				fmt.Fprintf(w, `<td class="%s">%s</td>`, unlockClass(u.Status), unlockLabel(u))
+				fmt.Fprintf(w, `<td class="%s">%s</td>`, availabilityClass(u.Status), availabilityLabel(u))
 			} else {
 				fmt.Fprintf(w, `<td class="error-cell">-</td>`)
 			}
@@ -475,7 +475,7 @@ func mlDSAPublicKeyField(cert *ats.ATSCertificate) string {
 `, cert.MLDSAPublicKey)
 }
 
-func unlockClass(status string) string {
+func availabilityClass(status string) string {
 	switch status {
 	case "yes":
 		return "yes"
@@ -488,20 +488,20 @@ func unlockClass(status string) string {
 	}
 }
 
-func unlockLabel(u *checker.UnlockStatus) string {
+func availabilityLabel(u *checker.AvailabilityStatus) string {
 	if u == nil {
 		return "-"
 	}
 	switch u.Status {
 	case "yes":
 		if u.Region != "" {
-			return fmt.Sprintf("解锁(%s)", u.Region)
+			return fmt.Sprintf("可用(%s)", u.Region)
 		}
-		return "解锁"
+		return "可用"
 	case "partial":
 		return "部分"
 	case "no":
-		return "未解锁"
+		return "不可用"
 	default:
 		return "错误"
 	}

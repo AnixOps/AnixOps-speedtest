@@ -76,7 +76,7 @@ func truncateBody(s string, limit int) string {
 	return s[:limit]
 }
 
-type UnlockStatus struct {
+type AvailabilityStatus struct {
 	Service string `json:"service"`
 	Status  string `json:"status"` // "yes", "no", "partial", "error"
 	Region  string `json:"region,omitempty"`

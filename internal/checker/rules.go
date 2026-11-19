@@ -98,7 +98,7 @@ func (r *Rule) Validate() error {
 func ParseRules(data []byte) ([]Rule, error) {
 	var rules []Rule
 	if err := yaml.Unmarshal(data, &rules); err != nil {
-		return nil, fmt.Errorf("parse unlock rules: %w", err)
+		return nil, fmt.Errorf("parse availability rules: %w", err)
 	}
 	for i := range rules {
 		if err := rules[i].Validate(); err != nil {
@@ -112,7 +112,7 @@ func ParseRules(data []byte) ([]Rule, error) {
 func DefaultRules() []Rule {
 	rules, err := ParseRules(defaultRulesYAML)
 	if err != nil {
-		panic("built-in unlock rules are invalid: " + err.Error()) // covered by tests
+		panic("built-in availability rules are invalid: " + err.Error()) // covered by tests
 	}
 	return rules
 }
@@ -126,7 +126,7 @@ func LoadRules(path string) ([]Rule, error) {
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read unlock rules: %w", err)
+		return nil, fmt.Errorf("read availability rules: %w", err)
 	}
 	custom, err := ParseRules(data)
 	if err != nil {
@@ -204,7 +204,7 @@ func containsAny(haystack string, needles []string) bool {
 }
 
 // evaluate applies the rule's steps to a response.
-func (r *Rule) evaluate(resp response) UnlockStatus {
+func (r *Rule) evaluate(resp response) AvailabilityStatus {
 	out := r.Otherwise
 	for _, s := range r.Steps {
 		if s.When.matches(resp) {
@@ -212,7 +212,7 @@ func (r *Rule) evaluate(resp response) UnlockStatus {
 			break
 		}
 	}
-	u := UnlockStatus{
+	u := AvailabilityStatus{
 		Service:    r.Service,
 		Status:     out.Status,
 		Detail:     strings.ReplaceAll(out.Detail, "{status}", strconv.Itoa(resp.status)),
@@ -230,10 +230,10 @@ func (r *Rule) evaluate(resp response) UnlockStatus {
 	return u
 }
 
-const unlockUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+const browserUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 // Run fetches the rule's URL through the proxy and returns the verdict.
-func (r *Rule) Run(ctx context.Context, proxyURL string, timeout time.Duration) (UnlockStatus, Evidence) {
+func (r *Rule) Run(ctx context.Context, proxyURL string, timeout time.Duration) (AvailabilityStatus, Evidence) {
 	status, ev := r.runOnce(ctx, proxyURL, timeout)
 	if r.Fallback != nil && (status.Status == "error" || status.Status == "no") {
 		fb := *r.Fallback
@@ -245,11 +245,11 @@ func (r *Rule) Run(ctx context.Context, proxyURL string, timeout time.Duration) 
 	return status, ev
 }
 
-func (r *Rule) runOnce(ctx context.Context, proxyURL string, timeout time.Duration) (UnlockStatus, Evidence) {
+func (r *Rule) runOnce(ctx context.Context, proxyURL string, timeout time.Duration) (AvailabilityStatus, Evidence) {
 	ev := Evidence{Test: r.Service, URL: r.URL, Method: "GET"}
-	fail := func(err error) (UnlockStatus, Evidence) {
+	fail := func(err error) (AvailabilityStatus, Evidence) {
 		ev.RawError = err.Error()
-		return UnlockStatus{Service: r.Service, Status: "error", Detail: err.Error(), Confidence: "high"}, ev
+		return AvailabilityStatus{Service: r.Service, Status: "error", Detail: err.Error(), Confidence: "high"}, ev
 	}
 
 	client, err := proxy.NewHTTPClient(proxyURL, timeout)
@@ -260,7 +260,7 @@ func (r *Rule) runOnce(ctx context.Context, proxyURL string, timeout time.Durati
 	if err != nil {
 		return fail(err)
 	}
-	req.Header.Set("User-Agent", unlockUA)
+	req.Header.Set("User-Agent", browserUA)
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
 	for k, v := range r.Headers {
 		req.Header.Set(k, v)
@@ -288,9 +288,9 @@ func (r *Rule) runOnce(ctx context.Context, proxyURL string, timeout time.Durati
 	return r.evaluate(response{status: resp.StatusCode, finalURL: final, header: resp.Header, body: body}), ev
 }
 
-// RunUnlockChecks runs every rule concurrently and returns results in rule order.
-func RunUnlockChecks(ctx context.Context, proxyURL string, timeout time.Duration, rules []Rule) ([]UnlockStatus, []Evidence) {
-	statuses := make([]UnlockStatus, len(rules))
+// RunAvailabilityChecks runs every rule concurrently and returns results in rule order.
+func RunAvailabilityChecks(ctx context.Context, proxyURL string, timeout time.Duration, rules []Rule) ([]AvailabilityStatus, []Evidence) {
+	statuses := make([]AvailabilityStatus, len(rules))
 	evidence := make([]Evidence, len(rules))
 	var wg sync.WaitGroup
 	for i := range rules {

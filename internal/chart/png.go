@@ -61,7 +61,7 @@ func GeneratePNG(path string, results []probe.NodeResult, cert *ats.ATSCertifica
 
 	serviceSet := map[string]struct{}{}
 	for _, r := range results {
-		for _, u := range r.Unlocks {
+		for _, u := range r.Availability {
 			serviceSet[u.Service] = struct{}{}
 		}
 	}
@@ -178,25 +178,25 @@ func GeneratePNG(path string, results []probe.NodeResult, cert *ats.ATSCertifica
 			header: svc,
 			width:  w,
 			data: func(r probe.NodeResult) string {
-				for _, u := range r.Unlocks {
+				for _, u := range r.Availability {
 					if u.Service == svc {
-						return unlockLabelStr(u)
+						return availabilityLabelStr(u)
 					}
 				}
 				return "-"
 			},
 			fg: func(r probe.NodeResult) color.Color {
-				for _, u := range r.Unlocks {
+				for _, u := range r.Availability {
 					if u.Service == svc {
-						return unlockFG(u.Status)
+						return availabilityFG(u.Status)
 					}
 				}
 				return fgMuted
 			},
 			bg: func(r probe.NodeResult) color.Color {
-				for _, u := range r.Unlocks {
+				for _, u := range r.Availability {
 					if u.Service == svc {
-						return unlockBG(u.Status)
+						return availabilityBG(u.Status)
 					}
 				}
 				return bgError
@@ -459,7 +459,7 @@ func speedFG(mbps, max float64) color.Color {
 	return color.RGBA{239, 154, 154, 255}
 }
 
-func unlockBG(status string) color.Color {
+func availabilityBG(status string) color.Color {
 	switch status {
 	case "yes":
 		return color.RGBA{27, 94, 32, 255}
@@ -472,7 +472,7 @@ func unlockBG(status string) color.Color {
 	}
 }
 
-func unlockFG(status string) color.Color {
+func availabilityFG(status string) color.Color {
 	switch status {
 	case "yes":
 		return color.RGBA{165, 214, 167, 255}
@@ -485,7 +485,7 @@ func unlockFG(status string) color.Color {
 	}
 }
 
-func unlockLabelStr(u checker.UnlockStatus) string {
+func availabilityLabelStr(u checker.AvailabilityStatus) string {
 	if u.Service == "" {
 		return "-"
 	}

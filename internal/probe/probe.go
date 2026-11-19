@@ -38,27 +38,27 @@ const (
 )
 
 type Config struct {
-	Kernel       Kernel
-	Timeout      time.Duration
-	DownloadSize int64
-	SkipLatency  bool
-	SkipSpeed    bool
-	SkipUnlock   bool
-	SkipTopo     bool
-	SkipIPRisk   bool
-	SkipDNS      bool
-	SkipSSH      bool
-	BinDir       string
+	Kernel           Kernel
+	Timeout          time.Duration
+	DownloadSize     int64
+	SkipLatency      bool
+	SkipSpeed        bool
+	SkipAvailability bool
+	SkipTopo         bool
+	SkipIPRisk       bool
+	SkipDNS          bool
+	SkipSSH          bool
+	BinDir           string
 	// AnxBin is the anx-proxy binary for KernelAnx (empty = search, see anx.ResolveBinary).
 	AnxBin string
 	// Repeat is how many latency samples to take per node (<=1 means one).
 	Repeat int
-	// SpeedTimeout / UnlockTimeout override Timeout for those phases (0 = default:
-	// 3x Timeout for the download, Timeout for unlock checks).
-	SpeedTimeout  time.Duration
-	UnlockTimeout time.Duration
-	// UnlockRules overrides the built-in unlock rules when non-nil.
-	UnlockRules []checker.Rule
+	// SpeedTimeout / AvailabilityTimeout override Timeout for those phases (0 = default:
+	// 3x Timeout for the download, Timeout for availability checks).
+	SpeedTimeout        time.Duration
+	AvailabilityTimeout time.Duration
+	// AvailabilityRules overrides the built-in availability rules when non-nil.
+	AvailabilityRules []checker.Rule
 	// MihomoBatch > 1 hosts up to that many nodes per mihomo process (one SOCKS
 	// listener each) instead of one process per node. Mihomo kernel only.
 	MihomoBatch int
@@ -85,14 +85,14 @@ type NodeResult struct {
 	// H3 is the HTTP/3 (QUIC) latency probe.
 	H3 *H3Result `json:"h3,omitempty"`
 	// Throughput is the multi-connection suite (download, upload, loaded latency).
-	Throughput *ThroughputResult        `json:"throughput,omitempty"`
-	Unlocks    []checker.UnlockStatus   `json:"unlocks,omitempty"`
-	IPRisk     *checker.IPRiskResult    `json:"ip_risk,omitempty"`
-	DNS        *checker.DNSRegionResult `json:"dns,omitempty"`
-	SSH        *checker.SSHResult       `json:"ssh,omitempty"`
-	Topology   *topo.TopologyResult     `json:"topology,omitempty"`
-	Error      string                   `json:"error,omitempty"`
-	Evidence   []Evidence               `json:"evidence,omitempty"`
+	Throughput   *ThroughputResult            `json:"throughput,omitempty"`
+	Availability []checker.AvailabilityStatus `json:"availability,omitempty"`
+	IPRisk       *checker.IPRiskResult        `json:"ip_risk,omitempty"`
+	DNS          *checker.DNSRegionResult     `json:"dns,omitempty"`
+	SSH          *checker.SSHResult           `json:"ssh,omitempty"`
+	Topology     *topo.TopologyResult         `json:"topology,omitempty"`
+	Error        string                       `json:"error,omitempty"`
+	Evidence     []Evidence                   `json:"evidence,omitempty"`
 }
 
 type LatencyResult struct {
@@ -466,14 +466,14 @@ func testNodeVia(ctx context.Context, idx int, p clash.Proxy, cfg Config, proxyU
 		}
 	}
 
-	// Streaming unlocks
-	if !cfg.SkipUnlock {
-		unlockTimeout := cfg.UnlockTimeout
-		if unlockTimeout <= 0 {
-			unlockTimeout = cfg.Timeout
+	// Service availability
+	if !cfg.SkipAvailability {
+		availabilityTimeout := cfg.AvailabilityTimeout
+		if availabilityTimeout <= 0 {
+			availabilityTimeout = cfg.Timeout
 		}
-		unlocks, ev := runUnlockChecks(ctx, proxyURL, unlockTimeout, cfg.UnlockRules)
-		result.Unlocks = unlocks
+		avail, ev := runAvailabilityChecks(ctx, proxyURL, availabilityTimeout, cfg.AvailabilityRules)
+		result.Availability = avail
 		allEvidence = append(allEvidence, ev...)
 	}
 
@@ -737,16 +737,16 @@ func mbpsFromBytes(bytes int64, elapsed time.Duration) float64 {
 	return float64(bytes*8) / elapsed.Seconds() / 1_000_000
 }
 
-func runUnlockChecks(ctx context.Context, proxyURL string, timeout time.Duration, rules []checker.Rule) ([]checker.UnlockStatus, []Evidence) {
+func runAvailabilityChecks(ctx context.Context, proxyURL string, timeout time.Duration, rules []checker.Rule) ([]checker.AvailabilityStatus, []Evidence) {
 	if rules == nil {
 		rules = checker.DefaultRules()
 	}
-	unlocks, evs := checker.RunUnlockChecks(ctx, proxyURL, timeout, rules)
+	avail, evs := checker.RunAvailabilityChecks(ctx, proxyURL, timeout, rules)
 	evidence := make([]Evidence, len(evs))
 	for i, ev := range evs {
 		evidence[i] = evidenceFromChecker(ev)
 	}
-	return unlocks, evidence
+	return avail, evidence
 }
 
 // --- Output formatters ---
@@ -754,7 +754,7 @@ func runUnlockChecks(ctx context.Context, proxyURL string, timeout time.Duration
 func WriteTable(w io.Writer, results []NodeResult) {
 	// Header
 	fmt.Fprintf(w, "\n%-3s  %-30s  %-8s  %-10s  %-10s  %-8s  %-20s  %-20s  %-10s  %-10s\n",
-		"#", "Name", "Type", "HTTP(ms)", "TCP(ms)", "Speed", "Unlocks", "IP Risk", "DNS Region", "SSH 22")
+		"#", "Name", "Type", "HTTP(ms)", "TCP(ms)", "Speed", "Services", "IP Risk", "DNS Region", "SSH 22")
 	fmt.Fprintf(w, "%s\n", strings.Repeat("-", 160))
 
 	for _, r := range results {
@@ -783,18 +783,18 @@ func WriteTable(w io.Writer, results []NodeResult) {
 			speed = fmt.Sprintf("%.1f", r.Speed.Mbps)
 		}
 
-		unlocks := "-"
-		if r.Unlocks != nil {
+		services := "-"
+		if r.Availability != nil {
 			var yes []string
-			for _, u := range r.Unlocks {
+			for _, u := range r.Availability {
 				if u.Status == "yes" {
 					yes = append(yes, u.Service)
 				}
 			}
 			if len(yes) > 0 {
-				unlocks = strings.Join(yes, ",")
+				services = strings.Join(yes, ",")
 			} else {
-				unlocks = "none"
+				services = "none"
 			}
 		}
 
@@ -821,7 +821,7 @@ func WriteTable(w io.Writer, results []NodeResult) {
 			fmt.Fprintf(w, "%-3d  %-30s  %-8s  %s\n", r.Index+1, name, r.Type, r.Error)
 		} else {
 			fmt.Fprintf(w, "%-3d  %-30s  %-8s  %-10s  %-10s  %-8s  %-20s  %-20s  %-10s  %-10s\n",
-				r.Index+1, name, r.Type, httpMs, tcpMs, speed, unlocks, ipRisk, dns, ssh)
+				r.Index+1, name, r.Type, httpMs, tcpMs, speed, services, ipRisk, dns, ssh)
 		}
 	}
 	fmt.Fprintln(w)
@@ -918,9 +918,9 @@ func WriteCSV(w io.Writer, results []NodeResult) {
 			speed = strconv.FormatFloat(r.Speed.Mbps, 'f', 2, 64)
 		}
 
-		unlockMap := map[string]string{}
-		for _, u := range r.Unlocks {
-			unlockMap[strings.ToLower(u.Service)] = u.Status
+		availMap := map[string]string{}
+		for _, u := range r.Availability {
+			availMap[strings.ToLower(u.Service)] = u.Status
 		}
 
 		ipScore := ""
@@ -967,9 +967,9 @@ func WriteCSV(w io.Writer, results []NodeResult) {
 		_ = cw.Write([]string{
 			strconv.Itoa(r.Index), r.Name, r.Type, r.Server, strconv.Itoa(r.Port),
 			httpMs, tcpMs, speed,
-			unlockMap["netflix"], unlockMap["youtube premium"], unlockMap["disney+"],
-			unlockMap["bilibili"], unlockMap["openai"], unlockMap["claude"],
-			unlockMap["spotify"], unlockMap["tiktok"], unlockMap["wikipedia"],
+			availMap["netflix"], availMap["youtube premium"], availMap["disney+"],
+			availMap["bilibili"], availMap["openai"], availMap["claude"],
+			availMap["spotify"], availMap["tiktok"], availMap["wikipedia"],
 			ipScore, ipLevel, dns, ssh, topoStr, r.Error, jit, loss,
 			idle, downMbps, downPeak, downLoaded, upMbps, upPeak, upLoaded,
 			h3Ms, h3HS, h3Loss,
